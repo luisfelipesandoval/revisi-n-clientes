@@ -123,3 +123,25 @@ test('Dirty Dozen #9 & #10 & #11 & #12: Invalid IDs, negative timestamps, and em
   };
   assert.equal(validateCommentCreatePayload(negativeSecondComment, true), false);
 });
+
+import { generateSecureProjectId, parseRoutePath, isValidId } from './src/utils/validation';
+
+test('generateSecureProjectId produces random IDs of at least 20 characters', () => {
+  const id1 = generateSecureProjectId();
+  const id2 = generateSecureProjectId();
+  assert.ok(id1.length >= 20);
+  assert.ok(id2.length >= 20);
+  assert.notEqual(id1, id2);
+  assert.equal(isValidId(id1), true);
+});
+
+test('parseRoutePath separates Admin root (/) from Client page (/ver/ID) and flags invalid routes', () => {
+  assert.deepEqual(parseRoutePath('/'), { view: 'admin' });
+  assert.deepEqual(parseRoutePath('/ver/AbCdEfGhIjKlMnOpQrStUvWxYz12'), {
+    view: 'client',
+    projectId: 'AbCdEfGhIjKlMnOpQrStUvWxYz12',
+  });
+  assert.deepEqual(parseRoutePath('/ver/'), { view: 'invalid-client-link' });
+  assert.deepEqual(parseRoutePath('/otra-ruta'), { view: 'invalid-client-link' });
+});
+

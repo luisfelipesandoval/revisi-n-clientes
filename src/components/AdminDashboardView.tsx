@@ -31,7 +31,6 @@ import {
   parseVideoUrl,
 } from '../utils/video';
 import {
-  ADMIN_EMAIL,
   VALID_STATUSES,
   VALID_CURRENCIES,
   isAuthorizedAdminUser,
@@ -40,8 +39,7 @@ import {
 interface AdminDashboardViewProps {
   currentUser: FirebaseUser | null;
   authReady: boolean;
-  isDemoAdmin: boolean;
-  onEnableDemoAdmin: () => void;
+  unauthorizedDenied: boolean;
   onSignInGoogle: () => Promise<void>;
   onSignOut: () => Promise<void>;
   projects: Project[];
@@ -52,27 +50,25 @@ interface AdminDashboardViewProps {
   onUpdateProject: (projectId: string, input: ProjectFormInput) => Promise<void>;
   onDeleteProject: (projectId: string) => Promise<void>;
   onToggleCommentResolved: (commentId: string, currentResolved: boolean) => Promise<void>;
-  onOpenClientPreview: (projectId: string) => void;
 }
 
 const DEFAULT_FORM_INPUT: ProjectFormInput = {
   title: '',
   clientName: '',
-  videoUrl: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
-  price: 350,
+  videoUrl: '',
+  price: 0,
   currency: 'S/',
   showPrice: true,
   watermarkEnabled: true,
-  watermarkText: 'BORRADOR · NO PUBLICAR',
+  watermarkText: '',
   status: 'En revisión',
-  whatsappNumber: '51987654321',
+  whatsappNumber: '',
 };
 
 export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   currentUser,
   authReady,
-  isDemoAdmin,
-  onEnableDemoAdmin,
+  unauthorizedDenied,
   onSignInGoogle,
   onSignOut,
   projects,
@@ -83,9 +79,8 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   onUpdateProject,
   onDeleteProject,
   onToggleCommentResolved,
-  onOpenClientPreview,
 }) => {
-  const isVerifiedAdmin = isAuthorizedAdminUser(currentUser) || isDemoAdmin;
+  const isVerifiedAdmin = isAuthorizedAdminUser(currentUser);
   const selectedProject =
     projects.find((p) => p.id === selectedProjectId) || projects[0] || null;
 
@@ -99,40 +94,41 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   const [authError, setAuthError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (isCreatingNew) {
+    if (isCreatingNew || !selectedProject) {
       setFormState(DEFAULT_FORM_INPUT);
       setFormError(null);
       setSaveSuccess(null);
       return;
     }
-    if (selectedProject) {
-      setFormState({
-        title: selectedProject.title,
-        clientName: selectedProject.clientName,
-        videoUrl: selectedProject.videoUrl,
-        price: selectedProject.price,
-        currency: selectedProject.currency,
-        showPrice: selectedProject.showPrice,
-        watermarkEnabled: selectedProject.watermarkEnabled,
-        watermarkText: selectedProject.watermarkText,
-        status: selectedProject.status,
-        whatsappNumber: selectedProject.whatsappNumber,
-      });
-      setFormError(null);
-      setConfirmDeleteId(null);
-    }
+    setFormState({
+      title: selectedProject.title,
+      clientName: selectedProject.clientName,
+      videoUrl: selectedProject.videoUrl,
+      price: selectedProject.price,
+      currency: selectedProject.currency,
+      showPrice: selectedProject.showPrice,
+      watermarkEnabled: selectedProject.watermarkEnabled,
+      watermarkText: selectedProject.watermarkText,
+      status: selectedProject.status,
+      whatsappNumber: selectedProject.whatsappNumber,
+    });
+    setFormError(null);
+    setConfirmDeleteId(null);
   }, [selectedProject?.id, isCreatingNew]);
 
+  const getClientShareUrl = (projectId: string) => {
+    return `${window.location.origin}/ver/${encodeURIComponent(projectId)}`;
+  };
+
   const handleCopyClientLink = async (projectId: string) => {
-    const url = `${window.location.origin}${window.location.pathname}?p=${encodeURIComponent(projectId)}`;
+    const url = getClientShareUrl(projectId);
     try {
       await navigator.clipboard.writeText(url);
-      setCopiedId(projectId);
-      window.setTimeout(() => setCopiedId(null), 2500);
     } catch {
-      setCopiedId(projectId);
-      window.setTimeout(() => setCopiedId(null), 2500);
+      // Fallback ignore
     }
+    setCopiedId(projectId);
+    window.setTimeout(() => setCopiedId(null), 2500);
   };
 
   const handleFormSubmit = async (e: React.FormEvent) => {
@@ -216,92 +212,73 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
 
   if (!authReady) {
     return (
-      <div className="max-w-4xl mx-auto px-4 py-16 text-center">
-        <p className="text-sm text-slate-400">Verificando sesión de administrador...</p>
+      <div className="min-h-screen flex items-center justify-center px-4">
+        <p className="text-sm text-slate-400">Cargando...</p>
       </div>
     );
   }
 
-  // Gate: Only allow ADMIN_EMAIL (or explicit demo admin sandbox for preview/testing)
+  // Gate: If not logged in as the authorized admin, show ONLY the Google Sign-In screen (and "Sin acceso" if another account attempted sign-in)
   if (!isVerifiedAdmin) {
-    const isWrongAccount = currentUser && !isAuthorizedAdminUser(currentUser);
-
     return (
-      <div className="max-w-md mx-auto px-4 py-12 sm:py-16">
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 sm:p-8 space-y-6">
-          <div className="w-12 h-12 rounded-2xl bg-sky-500/10 border border-sky-500/30 flex items-center justify-center text-sky-400">
-            {isWrongAccount ? (
+      <div className="min-h-screen flex items-center justify-center px-4 py-12">
+        <div className="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-2xl p-6 sm:p-8 space-y-6 text-center">
+          <div className="w-12 h-12 mx-auto rounded-2xl bg-sky-500/10 border border-sky-500/30 flex items-center justify-center text-sky-400">
+            {unauthorizedDenied ? (
               <ShieldAlert className="w-6 h-6 text-rose-400" />
             ) : (
               <Lock className="w-6 h-6" />
             )}
           </div>
 
-          <div className="space-y-2">
+          <div className="space-y-1.5">
             <h1 className="text-xl font-bold text-white">
-              Panel de Administrador
+              Panel de Administración
             </h1>
-            <p className="text-sm text-slate-400 leading-relaxed">
-              Acceso exclusivo con Google Sign-In restringido al correo autorizado{' '}
-              <span className="font-mono text-slate-200">{ADMIN_EMAIL}</span>.
+            <p className="text-xs text-slate-400">
+              Inicia sesión con tu cuenta de Google autorizada para continuar.
             </p>
           </div>
 
-          {isWrongAccount && (
-            <div className="bg-rose-950/60 border border-rose-500/40 rounded-xl p-3.5 text-xs text-rose-200 space-y-1">
-              <p className="font-semibold">Cuenta no autorizada</p>
-              <p>
-                Has iniciado sesión como <strong>{currentUser.email}</strong>, pero solo{' '}
-                <strong>{ADMIN_EMAIL}</strong> tiene permisos de escritura en Firestore.
-              </p>
+          {unauthorizedDenied && (
+            <div
+              className="bg-rose-950/70 border border-rose-500/40 rounded-xl p-3.5 text-sm font-semibold text-rose-200"
+              role="alert"
+              data-testid="access-denied-alert"
+            >
+              Sin acceso
             </div>
           )}
 
           {authError && (
-            <div className="bg-rose-950/60 border border-rose-500/40 rounded-xl p-3 text-xs text-rose-200">
+            <div className="bg-rose-950/60 border border-rose-500/40 rounded-xl p-3 text-xs text-rose-200 text-left">
               {authError}
             </div>
           )}
 
-          <div className="space-y-3">
-            {isWrongAccount ? (
-              <button
-                type="button"
-                onClick={() => onSignOut()}
-                className="w-full min-h-[48px] px-4 py-3 rounded-xl bg-slate-100 hover:bg-white text-slate-950 font-semibold text-sm inline-flex items-center justify-center gap-2 transition-colors cursor-pointer"
-              >
-                <LogOut className="w-4 h-4" />
-                <span>Cerrar sesión y cambiar de cuenta</span>
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={async () => {
-                  setAuthError(null);
-                  try {
-                    await onSignInGoogle();
-                  } catch (err) {
-                    setAuthError(
-                      err instanceof Error
-                        ? err.message
-                        : 'No se pudo completar el inicio de sesión con Google.'
-                    );
-                  }
-                }}
-                className="w-full min-h-[48px] px-4 py-3 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold text-sm inline-flex items-center justify-center gap-2 transition-colors cursor-pointer"
-              >
-                <span>Iniciar sesión con Google</span>
-              </button>
-            )}
-
-            <button
-              type="button"
-              onClick={onEnableDemoAdmin}
-              className="w-full min-h-[44px] px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium text-xs inline-flex items-center justify-center gap-2 transition-colors cursor-pointer"
-            >
-              <span>Probar Panel de Admin (Modo Demo Local)</span>
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={async () => {
+              setAuthError(null);
+              try {
+                await onSignInGoogle();
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                if (msg.includes('auth/unauthorized-domain')) {
+                  setAuthError(
+                    `Agrega el dominio "${window.location.hostname}" en Firebase Console → Authentication → Settings → Dominios autorizados.`
+                  );
+                } else {
+                  setAuthError(
+                    msg || 'No se pudo completar el inicio de sesión con Google.'
+                  );
+                }
+              }
+            }}
+            className="w-full min-h-[48px] px-4 py-3 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold text-sm inline-flex items-center justify-center gap-2 transition-colors cursor-pointer"
+          >
+            <span>Iniciar sesión con Google</span>
+          </button>
         </div>
       </div>
     );
@@ -312,22 +289,13 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
       {/* Admin Header Strip */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-6 mb-6 border-b border-slate-800">
+      <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-6 mb-6 border-b border-slate-800">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold text-white tracking-tight">
-            Gestión de Proyectos de Video
+            Panel de Administración
           </h1>
-          <p className="text-xs text-slate-400 mt-1">
-            {currentUser ? (
-              <>
-                Conectado a Firestore como{' '}
-                <span className="font-mono text-slate-200">{currentUser.email}</span>
-              </>
-            ) : (
-              <span>
-                Modo Demo Local activo · Inicia sesión con Google ({ADMIN_EMAIL}) para guardar en Firestore
-              </span>
-            )}
+          <p className="text-xs text-slate-400 mt-1 font-mono">
+            {currentUser?.email}
           </p>
         </div>
 
@@ -341,18 +309,16 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
             <span>Nuevo proyecto</span>
           </button>
 
-          {currentUser && (
-            <button
-              type="button"
-              onClick={() => onSignOut()}
-              className="min-h-[44px] px-3.5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 text-xs font-medium inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              <LogOut className="w-4 h-4" />
-              <span>Salir</span>
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={() => onSignOut()}
+            className="min-h-[44px] px-3.5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 text-xs font-medium inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            <LogOut className="w-4 h-4" />
+            <span>Cerrar sesión</span>
+          </button>
         </div>
-      </div>
+      </header>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         {/* Left Sidebar: Project List (4 cols) */}
@@ -370,7 +336,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                 Sin proyectos creados
               </p>
               <p className="text-xs text-slate-500">
-                Toca &ldquo;Nuevo proyecto&rdquo; para compartir tu primer video con un cliente.
+                Usa el botón &ldquo;Nuevo proyecto&rdquo; para crear tu primer enlace de cliente.
               </p>
             </div>
           ) : (
@@ -426,19 +392,20 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                         ) : (
                           <>
                             <Copy className="w-3.5 h-3.5 text-sky-400" />
-                            <span>Copiar enlace</span>
+                            <span>Copiar enlace del cliente</span>
                           </>
                         )}
                       </button>
 
-                      <button
-                        type="button"
-                        onClick={() => onOpenClientPreview(proj.id)}
-                        className="min-h-[36px] px-2.5 py-1 rounded-lg text-xs font-medium text-sky-400 hover:text-sky-300 inline-flex items-center gap-1 transition-colors cursor-pointer"
+                      <a
+                        href={`/ver/${encodeURIComponent(proj.id)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="min-h-[36px] px-2 py-1 rounded-lg text-xs font-medium text-sky-400 hover:text-sky-300 inline-flex items-center gap-1 transition-colors"
+                        title="Abrir enlace del cliente en pestaña nueva"
                       >
-                        <span>Ver como cliente</span>
                         <ExternalLink className="w-3.5 h-3.5" />
-                      </button>
+                      </a>
                     </div>
                   </div>
                 );
@@ -455,12 +422,14 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
               <div>
                 <h2 className="text-base sm:text-lg font-bold text-white">
                   {isCreatingNew || !selectedProject
-                    ? 'Crear nuevo proyecto'
+                    ? 'Nuevo proyecto'
                     : `Editar: ${selectedProject.title}`}
                 </h2>
-                <p className="text-xs text-slate-400 mt-0.5">
-                  Configura el enlace de YouTube o .mp4, precio, marca de agua y estado
-                </p>
+                {!isCreatingNew && selectedProject && (
+                  <p className="text-xs text-slate-400 font-mono mt-0.5">
+                    /ver/{selectedProject.id}
+                  </p>
+                )}
               </div>
 
               {!isCreatingNew && selectedProject && (
@@ -504,7 +473,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                     onChange={(e) =>
                       setFormState((prev) => ({ ...prev, title: e.target.value }))
                     }
-                    placeholder="Ej. Reel Lanzamiento Colección Verano"
+                    placeholder="Ej. Reel Campaña Verano"
                     className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-sky-400"
                   />
                 </div>
@@ -539,7 +508,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                   htmlFor="proj-video-url"
                   className="block text-xs font-medium text-slate-300 mb-1.5"
                 >
-                  Enlace del video (YouTube no listado / Shorts o enlace directo .mp4)
+                  Enlace del video (URL directa a archivo .mp4)
                 </label>
                 <input
                   id="proj-video-url"
@@ -553,7 +522,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                       videoUrl: e.target.value,
                     }))
                   }
-                  placeholder="https://youtu.be/... o https://.../video.mp4"
+                  placeholder="https://.../video.mp4"
                   className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white font-mono placeholder-slate-500 focus:outline-none focus:border-sky-400"
                 />
               </div>
@@ -636,7 +605,6 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
-                {/* Toggle Show/Hide Price to Client */}
                 <label className="flex items-center justify-between gap-3 p-3.5 rounded-xl bg-slate-950 border border-slate-800 cursor-pointer">
                   <div className="space-y-0.5">
                     <span className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
@@ -648,7 +616,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                       <span>Mostrar precio al cliente</span>
                     </span>
                     <p className="text-xs text-slate-400">
-                      Visible junto al título en la pantalla del cliente
+                      Visible junto al título en la página del cliente
                     </p>
                   </div>
                   <input
@@ -664,7 +632,6 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                   />
                 </label>
 
-                {/* Toggle Watermark Overlay */}
                 <label className="flex items-center justify-between gap-3 p-3.5 rounded-xl bg-slate-950 border border-slate-800 cursor-pointer">
                   <div className="space-y-0.5">
                     <span className="text-xs font-semibold text-slate-200">
@@ -707,7 +674,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                         watermarkText: e.target.value,
                       }))
                     }
-                    placeholder="Ej. VISTA PREVIA · STUDIO KORA"
+                    placeholder="Ej. VISTA PREVIA"
                     className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-sky-400"
                   />
                 </div>

@@ -21,6 +21,59 @@ export function isValidId(id: unknown): id is string {
   );
 }
 
+/**
+ * Generates a cryptographically random alphanumeric ID of at least 20 characters (default 28)
+ * so client project links (/ver/ID_DEL_PROYECTO) cannot be guessed.
+ */
+export function generateSecureProjectId(length = 28): string {
+  const safeLength = Math.max(20, Math.min(64, length));
+  const charset = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+  const randomValues = new Uint32Array(safeLength);
+  if (typeof globalThis.crypto !== 'undefined' && globalThis.crypto.getRandomValues) {
+    globalThis.crypto.getRandomValues(randomValues);
+  } else {
+    for (let i = 0; i < safeLength; i++) {
+      randomValues[i] = Math.floor(Math.random() * charset.length);
+    }
+  }
+  let result = '';
+  for (let i = 0; i < safeLength; i++) {
+    result += charset[randomValues[i] % charset.length];
+  }
+  return result;
+}
+
+export type AppRoute =
+  | { view: 'admin' }
+  | { view: 'client'; projectId: string }
+  | { view: 'invalid-client-link' };
+
+/**
+ * Parses window.location.pathname into two strictly separated zones:
+ * - "/" -> Admin zone
+ * - "/ver/ID_DEL_PROYECTO" -> Independent public Client page
+ */
+export function parseRoutePath(pathname: string): AppRoute {
+  const clean = pathname.trim();
+  if (clean === '' || clean === '/') {
+    return { view: 'admin' };
+  }
+
+  if (clean.startsWith('/ver')) {
+    const match = clean.match(/^\/ver\/([^/]+)\/?$/);
+    if (!match || !match[1]) {
+      return { view: 'invalid-client-link' };
+    }
+    const rawId = decodeURIComponent(match[1]);
+    if (!isValidId(rawId)) {
+      return { view: 'invalid-client-link' };
+    }
+    return { view: 'client', projectId: rawId };
+  }
+
+  return { view: 'invalid-client-link' };
+}
+
 export function isAuthorizedAdminUser(
   user: { uid?: string; email?: string | null; emailVerified?: boolean } | null | undefined
 ): boolean {

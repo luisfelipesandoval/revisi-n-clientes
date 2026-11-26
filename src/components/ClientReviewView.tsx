@@ -301,6 +301,7 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
             videoUrl={project.videoUrl}
             watermarkEnabled={project.watermarkEnabled}
             watermarkText={project.watermarkText}
+            commentSeconds={sortedComments.map((c) => c.videoSecond)}
             onTimeUpdate={(sec) => setLiveSecond(sec)}
           />
 

@@ -1,55 +1,37 @@
 import { VideoComment, ProjectStatus } from '../types';
 
 export type VideoSourceType =
-  | { type: 'youtube'; videoId: string; originalUrl: string }
   | { type: 'mp4'; src: string }
   | { type: 'invalid'; reason: string };
 
 /**
- * Extracts a 11-character YouTube video ID from standard watch URLs,
- * unlisted share links, Shorts URLs, embed URLs, or youtu.be links.
- */
-export function extractYouTubeId(url: string): string | null {
-  const trimmed = url.trim();
-  if (!trimmed) return null;
-
-  // Match youtu.be/VIDEO_ID, youtube.com/watch?v=VIDEO_ID, youtube.com/shorts/VIDEO_ID, youtube.com/embed/VIDEO_ID, youtube.com/live/VIDEO_ID
-  const patterns = [
-    /(?:youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|shorts\/|live\/|v\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/,
-    /^([a-zA-Z0-9_-]{11})$/,
-  ];
-
-  for (const pattern of patterns) {
-    const match = trimmed.match(pattern);
-    if (match && match[1]) {
-      return match[1];
-    }
-  }
-  return null;
-}
-
-/**
- * Determines whether a pasted video URL is a YouTube link or a direct MP4/video link.
+ * Validates that a pasted video URL is a direct HTTP/HTTPS link to an .mp4 video
+ * (and explicitly rejects YouTube links since only direct .mp4 files are supported).
  */
 export function parseVideoUrl(url: string): VideoSourceType {
   const trimmed = url.trim();
   if (!trimmed) {
-    return { type: 'invalid', reason: 'Ingresa un enlace de video válido.' };
-  }
-
-  const ytId = extractYouTubeId(trimmed);
-  if (ytId) {
-    return { type: 'youtube', videoId: ytId, originalUrl: trimmed };
+    return { type: 'invalid', reason: 'Ingresa un enlace directo a un archivo .mp4.' };
   }
 
   try {
     const parsed = new URL(trimmed);
-    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
-      return { type: 'mp4', src: trimmed };
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return { type: 'invalid', reason: 'El enlace debe comenzar con http:// o https://.' };
     }
-    return { type: 'invalid', reason: 'El enlace debe comenzar con http:// o https://.' };
+    const host = parsed.hostname.toLowerCase();
+    if (host.includes('youtube.com') || host.includes('youtu.be')) {
+      return {
+        type: 'invalid',
+        reason: 'Solo se admiten enlaces directos a archivos .mp4 (no enlaces de YouTube).',
+      };
+    }
+    return { type: 'mp4', src: trimmed };
   } catch {
-    return { type: 'invalid', reason: 'Formato de enlace no reconocido. Usa un enlace de YouTube o un archivo .mp4 directo.' };
+    return {
+      type: 'invalid',
+      reason: 'Formato de enlace no válido. Ingresa una URL directa a un archivo .mp4.',
+    };
   }
 }
 

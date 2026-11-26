@@ -110,9 +110,10 @@ service cloud.firestore {
       // Solo el admin puede listar proyectos
       allow list: if isAdmin() && existing().status in ['En revisión', 'Cambios solicitados', 'Aprobado'];
 
-      // Solo el admin puede crear proyectos
+      // Solo el admin puede crear proyectos (con ID aleatorio de mínimo 20 caracteres)
       allow create: if isAdmin() &&
         isValidId(projectId) &&
+        projectId.size() >= 20 &&
         isValidProject(incoming()) &&
         incoming().createdAt == request.time &&
         incoming().updatedAt == request.time;

@@ -16,7 +16,6 @@ export interface Project {
   whatsappNumber: string;
   createdAt: Date;
   updatedAt: Date;
-  isDemo?: boolean;
 }
 
 export interface VideoComment {

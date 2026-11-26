@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  extractYouTubeId,
   parseVideoUrl,
   formatVideoTimestamp,
   parseTimestampInput,
@@ -11,23 +10,15 @@ import {
 } from './video';
 import { VideoComment } from '../types';
 
-test('extractYouTubeId handles unlisted watch URLs, Shorts, youtu.be, and embed links', () => {
-  assert.equal(extractYouTubeId('https://www.youtube.com/watch?v=dQw4w9WgXcQ'), 'dQw4w9WgXcQ');
-  assert.equal(extractYouTubeId('https://youtu.be/dQw4w9WgXcQ?si=12345'), 'dQw4w9WgXcQ');
-  assert.equal(extractYouTubeId('https://www.youtube.com/shorts/9bZkp7q19f0'), '9bZkp7q19f0');
-  assert.equal(extractYouTubeId('https://www.youtube.com/embed/dQw4w9WgXcQ'), 'dQw4w9WgXcQ');
-  assert.equal(extractYouTubeId('https://cdn.example.com/reel-vertical.mp4'), null);
-});
-
-test('parseVideoUrl differentiates YouTube vs direct MP4 vs invalid URLs', () => {
-  const yt = parseVideoUrl('https://www.youtube.com/shorts/9bZkp7q19f0');
-  assert.equal(yt.type, 'youtube');
-  if (yt.type === 'youtube') {
-    assert.equal(yt.videoId, '9bZkp7q19f0');
-  }
-
+test('parseVideoUrl accepts direct MP4 URLs and rejects YouTube or invalid URLs', () => {
   const mp4 = parseVideoUrl('https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4');
   assert.equal(mp4.type, 'mp4');
+  if (mp4.type === 'mp4') {
+    assert.equal(mp4.src, 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4');
+  }
+
+  const yt = parseVideoUrl('https://www.youtube.com/shorts/9bZkp7q19f0');
+  assert.equal(yt.type, 'invalid');
 
   const invalid = parseVideoUrl('not a url');
   assert.equal(invalid.type, 'invalid');

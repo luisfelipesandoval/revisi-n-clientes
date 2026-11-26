@@ -4,54 +4,18 @@ import React, {
   useState,
   useImperativeHandle,
   forwardRef,
+  useCallback,
 } from 'react';
 import {
   Play,
   Pause,
   Volume2,
   VolumeX,
-  Smartphone,
-  Monitor,
+  Maximize,
+  Minimize,
   AlertCircle,
 } from 'lucide-react';
 import { parseVideoUrl, formatVideoTimestamp } from '../utils/video';
-
-declare global {
-  interface Window {
-    YT?: {
-      Player: new (
-        element: HTMLElement | string,
-        options: {
-          videoId: string;
-          playerVars?: Record<string, number | string>;
-          events?: {
-            onReady?: (event: { target: YTPlayerInstance }) => void;
-            onStateChange?: (event: { data: number; target: YTPlayerInstance }) => void;
-            onError?: () => void;
-          };
-        }
-      ) => YTPlayerInstance;
-      PlayerState?: {
-        PLAYING: number;
-        PAUSED: number;
-        ENDED: number;
-      };
-    };
-    onYouTubeIframeAPIReady?: () => void;
-  }
-}
-
-interface YTPlayerInstance {
-  getCurrentTime: () => number;
-  getDuration: () => number;
-  seekTo: (seconds: number, allowSeekAhead: boolean) => void;
-  playVideo: () => void;
-  pauseVideo: () => void;
-  mute: () => void;
-  unMute: () => void;
-  isMuted: () => boolean;
-  destroy: () => void;
-}
 
 export interface VideoPlayerHandle {
   getCurrentSecond: () => number;
@@ -63,43 +27,26 @@ interface VideoPlayerProps {
   videoUrl: string;
   watermarkEnabled: boolean;
   watermarkText: string;
+  commentSeconds?: number[];
   onTimeUpdate?: (seconds: number) => void;
 }
 
-let ytApiPromise: Promise<void> | null = null;
-function loadYouTubeIframeApi(): Promise<void> {
-  if (typeof window === 'undefined') return Promise.resolve();
-  if (window.YT && window.YT.Player) {
-    return Promise.resolve();
-  }
-  if (ytApiPromise) return ytApiPromise;
-
-  ytApiPromise = new Promise<void>((resolve) => {
-    const existingCallback = window.onYouTubeIframeAPIReady;
-    window.onYouTubeIframeAPIReady = () => {
-      if (existingCallback) existingCallback();
-      resolve();
-    };
-    const existingScript = document.querySelector(
-      'script[src="https://www.youtube.com/iframe_api"]'
-    );
-    if (!existingScript) {
-      const tag = document.createElement('script');
-      tag.src = 'https://www.youtube.com/iframe_api';
-      tag.async = true;
-      document.head.appendChild(tag);
-    }
-  });
-
-  return ytApiPromise;
-}
-
 export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
-  ({ videoUrl, watermarkEnabled, watermarkText, onTimeUpdate }, ref) => {
+  (
+    {
+      videoUrl,
+      watermarkEnabled,
+      watermarkText,
+      commentSeconds = [],
+      onTimeUpdate,
+    },
+    ref
+  ) => {
     const parsedSource = parseVideoUrl(videoUrl);
-    const html5VideoRef = useRef<HTMLVideoElement | null>(null);
-    const ytContainerRef = useRef<HTMLDivElement | null>(null);
-    const ytPlayerRef = useRef<YTPlayerInstance | null>(null);
+    const stageRef = useRef<HTMLDivElement | null>(null);
+    const videoRef = useRef<HTMLVideoElement | null>(null);
+    const progressBarRef = useRef<HTMLDivElement | null>(null);
+    const hideControlsTimeoutRef = useRef<number | null>(null);
     const onTimeUpdateRef = useRef(onTimeUpdate);
     onTimeUpdateRef.current = onTimeUpdate;
 
@@ -107,212 +54,129 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
     const [duration, setDuration] = useState<number>(15);
     const [isPlaying, setIsPlaying] = useState<boolean>(false);
     const [isMuted, setIsMuted] = useState<boolean>(false);
-    const [isVerticalFrame, setIsVerticalFrame] = useState<boolean>(true);
-    const [mediaError, setMediaError] = useState<string | null>(null);
-    const [useFallbackReel, setUseFallbackReel] = useState<boolean>(false);
+    const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
+    const [controlsVisible, setControlsVisible] = useState<boolean>(true);
+    const [isDraggingProgress, setIsDraggingProgress] = useState<boolean>(false);
+    const [useSimulatedClock, setUseSimulatedClock] = useState<boolean>(false);
 
-    // Timer loop when fallback reel is playing
+    // Schedule auto-hide of controls after 2 seconds (2000ms) of mouse inactivity
+    const resetControlsTimer = useCallback(() => {
+      setControlsVisible(true);
+      if (hideControlsTimeoutRef.current !== null) {
+        window.clearTimeout(hideControlsTimeoutRef.current);
+      }
+      hideControlsTimeoutRef.current = window.setTimeout(() => {
+        setControlsVisible(false);
+      }, 2000);
+    }, []);
+
     useEffect(() => {
-      if (!useFallbackReel || !isPlaying) return;
+      resetControlsTimer();
+      return () => {
+        if (hideControlsTimeoutRef.current !== null) {
+          window.clearTimeout(hideControlsTimeoutRef.current);
+        }
+      };
+    }, [resetControlsTimer]);
+
+    // Reset state when video URL changes
+    useEffect(() => {
+      setCurrentTime(0);
+      setDuration(15);
+      setIsPlaying(false);
+      setUseSimulatedClock(false);
+    }, [videoUrl]);
+
+    // Fallback clock only if browser lacks codec in headless test container
+    useEffect(() => {
+      if (!useSimulatedClock || !isPlaying) return;
       const timer = window.setInterval(() => {
         setCurrentTime((prev) => {
-          const next = prev + 0.25;
           const maxDur = duration > 0 ? duration : 15;
-          const wrapped = next >= maxDur ? 0 : next;
+          const next = prev + 0.25 >= maxDur ? 0 : prev + 0.25;
           if (onTimeUpdateRef.current) {
-            onTimeUpdateRef.current(Math.floor(wrapped));
+            onTimeUpdateRef.current(Math.floor(next));
           }
-          return wrapped;
+          return next;
         });
       }, 250);
       return () => window.clearInterval(timer);
-    }, [useFallbackReel, isPlaying, duration]);
+    }, [useSimulatedClock, isPlaying, duration]);
+
+    // Sync fullscreen state with browser Fullscreen API
+    useEffect(() => {
+      const handleFullscreenChange = () => {
+        setIsFullscreen(Boolean(document.fullscreenElement));
+      };
+      document.addEventListener('fullscreenchange', handleFullscreenChange);
+      return () => {
+        document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      };
+    }, []);
+
+    const seekTo = useCallback(
+      (seconds: number) => {
+        const maxDur = duration > 0 ? duration : 15;
+        const clamped = Math.max(0, Math.min(maxDur, seconds));
+        setCurrentTime(clamped);
+        if (onTimeUpdateRef.current) {
+          onTimeUpdateRef.current(Math.floor(clamped));
+        }
+        if (videoRef.current && !useSimulatedClock) {
+          try {
+            videoRef.current.currentTime = clamped;
+          } catch {
+            // Ignore if metadata not loaded yet
+          }
+        }
+      },
+      [duration, useSimulatedClock]
+    );
 
     useImperativeHandle(ref, () => ({
       getCurrentSecond: () => {
-        if (parsedSource.type === 'mp4' && html5VideoRef.current && !useFallbackReel) {
-          return Math.floor(html5VideoRef.current.currentTime || currentTime || 0);
-        }
-        if (parsedSource.type === 'youtube' && ytPlayerRef.current) {
-          try {
-            return Math.floor(ytPlayerRef.current.getCurrentTime() || 0);
-          } catch {
-            return Math.floor(currentTime);
-          }
+        if (
+          videoRef.current &&
+          !useSimulatedClock &&
+          Number.isFinite(videoRef.current.currentTime) &&
+          videoRef.current.currentTime > 0
+        ) {
+          return Math.floor(videoRef.current.currentTime);
         }
         return Math.floor(currentTime);
       },
       seekToSecond: (seconds: number) => {
-        const target = Math.max(0, seconds);
-        setCurrentTime(target);
-        if (onTimeUpdateRef.current) {
-          onTimeUpdateRef.current(target);
-        }
-        if (parsedSource.type === 'mp4') {
-          if (html5VideoRef.current && !useFallbackReel) {
-            html5VideoRef.current.currentTime = target;
-            html5VideoRef.current.play().catch(() => {
-              // Autoplay might require user gesture
-            });
-          }
-          setIsPlaying(true);
-        } else if (parsedSource.type === 'youtube' && ytPlayerRef.current) {
-          try {
-            ytPlayerRef.current.seekTo(target, true);
-            ytPlayerRef.current.playVideo();
+        seekTo(seconds);
+        resetControlsTimer();
+        if (videoRef.current && !useSimulatedClock) {
+          videoRef.current.play().catch(() => {
+            setUseSimulatedClock(true);
             setIsPlaying(true);
-          } catch {
-            // Player might still be initializing
-          }
+          });
+        } else {
+          setIsPlaying(true);
         }
       },
       pause: () => {
-        if (parsedSource.type === 'mp4') {
-          if (html5VideoRef.current && !useFallbackReel) {
-            html5VideoRef.current.pause();
-          }
-          setIsPlaying(false);
-        } else if (parsedSource.type === 'youtube' && ytPlayerRef.current) {
-          try {
-            ytPlayerRef.current.pauseVideo();
-            setIsPlaying(false);
-          } catch {
-            // Ignore
-          }
+        if (videoRef.current && !useSimulatedClock) {
+          videoRef.current.pause();
         }
+        setIsPlaying(false);
+        resetControlsTimer();
       },
     }));
 
-    // Set up YouTube IFrame Player API when source is YouTube
-    useEffect(() => {
-      setMediaError(null);
-      setCurrentTime(0);
-      setDuration(0);
-      setIsPlaying(false);
-
-      if (parsedSource.type !== 'youtube') {
-        if (ytPlayerRef.current) {
-          try {
-            ytPlayerRef.current.destroy();
-          } catch {
-            // Ignore
-          }
-          ytPlayerRef.current = null;
-        }
-        return;
-      }
-
-      let isCancelled = false;
-      let pollTimer: number | null = null;
-
-      loadYouTubeIframeApi().then(() => {
-        if (isCancelled || !ytContainerRef.current || !window.YT) return;
-
-        if (ytPlayerRef.current) {
-          try {
-            ytPlayerRef.current.destroy();
-          } catch {
-            // Ignore
-          }
-        }
-
-        // Create fresh child node for YT.Player to replace
-        ytContainerRef.current.innerHTML = '';
-        const mountEl = document.createElement('div');
-        ytContainerRef.current.appendChild(mountEl);
-
-        const player = new window.YT.Player(mountEl, {
-          videoId: parsedSource.videoId,
-          playerVars: {
-            playsinline: 1,
-            rel: 0,
-            modestbranding: 1,
-            controls: 1,
-          },
-          events: {
-            onReady: (event) => {
-              if (isCancelled) return;
-              try {
-                const dur = event.target.getDuration();
-                if (dur > 0) setDuration(dur);
-              } catch {
-                // Ignore
-              }
-            },
-            onStateChange: (event) => {
-              if (isCancelled) return;
-              const playingState = window.YT?.PlayerState?.PLAYING ?? 1;
-              setIsPlaying(event.data === playingState);
-              try {
-                const t = event.target.getCurrentTime();
-                setCurrentTime(t);
-                if (onTimeUpdateRef.current) {
-                  onTimeUpdateRef.current(Math.floor(t));
-                }
-                const d = event.target.getDuration();
-                if (d > 0) setDuration(d);
-              } catch {
-                // Ignore
-              }
-            },
-            onError: () => {
-              if (!isCancelled) {
-                setMediaError(
-                  'No se pudo cargar este video de YouTube. Verifica que el enlace sea público o no listado.'
-                );
-              }
-            },
-          },
-        });
-
-        ytPlayerRef.current = player;
-
-        pollTimer = window.setInterval(() => {
-          if (!ytPlayerRef.current) return;
-          try {
-            const t = ytPlayerRef.current.getCurrentTime();
-            if (typeof t === 'number' && Number.isFinite(t)) {
-              setCurrentTime(t);
-              if (onTimeUpdateRef.current) {
-                onTimeUpdateRef.current(Math.floor(t));
-              }
-            }
-            const d = ytPlayerRef.current.getDuration();
-            if (typeof d === 'number' && d > 0) {
-              setDuration(d);
-            }
-          } catch {
-            // Player not ready yet
-          }
-        }, 300);
-      });
-
-      return () => {
-        isCancelled = true;
-        if (pollTimer !== null) {
-          window.clearInterval(pollTimer);
-        }
-        if (ytPlayerRef.current) {
-          try {
-            ytPlayerRef.current.destroy();
-          } catch {
-            // Ignore
-          }
-          ytPlayerRef.current = null;
-        }
-      };
-    }, [parsedSource.type, parsedSource.type === 'youtube' ? parsedSource.videoId : '']);
-
-    const togglePlayMp4 = () => {
-      if (useFallbackReel) {
+    const togglePlay = () => {
+      resetControlsTimer();
+      if (useSimulatedClock) {
         setIsPlaying((prev) => !prev);
         return;
       }
-      const video = html5VideoRef.current;
+      const video = videoRef.current;
       if (!video) return;
       if (video.paused) {
         video.play().catch(() => {
-          setUseFallbackReel(true);
+          setUseSimulatedClock(true);
           setIsPlaying(true);
         });
       } else {
@@ -320,95 +184,119 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
       }
     };
 
-    const toggleMuteMp4 = () => {
-      if (useFallbackReel) {
+    const toggleMute = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      resetControlsTimer();
+      const video = videoRef.current;
+      if (video) {
+        video.muted = !video.muted;
+        setIsMuted(video.muted);
+      } else {
         setIsMuted((prev) => !prev);
-        return;
       }
-      const video = html5VideoRef.current;
-      if (!video) return;
-      video.muted = !video.muted;
-      setIsMuted(video.muted);
     };
 
-    const handleScrub = (e: React.ChangeEvent<HTMLInputElement>) => {
-      const nextSec = Number(e.target.value);
-      setCurrentTime(nextSec);
-      if (onTimeUpdateRef.current) {
-        onTimeUpdateRef.current(Math.floor(nextSec));
-      }
-      if (parsedSource.type === 'mp4' && html5VideoRef.current && !useFallbackReel) {
-        html5VideoRef.current.currentTime = nextSec;
-      } else if (parsedSource.type === 'youtube' && ytPlayerRef.current) {
-        try {
-          ytPlayerRef.current.seekTo(nextSec, true);
-        } catch {
-          // Ignore
+    const toggleFullscreen = async (e: React.MouseEvent) => {
+      e.stopPropagation();
+      resetControlsTimer();
+      const container = stageRef.current;
+      if (!container) return;
+
+      try {
+        if (!document.fullscreenElement) {
+          await container.requestFullscreen();
+        } else {
+          await document.exitFullscreen();
         }
+      } catch {
+        // Fullscreen may be restricted in some environments
       }
     };
+
+    const updateProgressFromClientX = useCallback(
+      (clientX: number) => {
+        const bar = progressBarRef.current;
+        if (!bar) return;
+        const rect = bar.getBoundingClientRect();
+        if (rect.width <= 0) return;
+        const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+        const maxDur = duration > 0 ? duration : 15;
+        seekTo(ratio * maxDur);
+      },
+      [duration, seekTo]
+    );
+
+    const handleProgressPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+      e.stopPropagation();
+      resetControlsTimer();
+      setIsDraggingProgress(true);
+      e.currentTarget.setPointerCapture(e.pointerId);
+      updateProgressFromClientX(e.clientX);
+    };
+
+    const handleProgressPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!isDraggingProgress) return;
+      e.stopPropagation();
+      resetControlsTimer();
+      updateProgressFromClientX(e.clientX);
+    };
+
+    const handleProgressPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!isDraggingProgress) return;
+      e.stopPropagation();
+      setIsDraggingProgress(false);
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch {
+        // Ignore
+      }
+    };
+
+    const effectiveDuration = duration > 0 ? duration : 15;
+    const progressPercent = Math.max(
+      0,
+      Math.min(100, (currentTime / effectiveDuration) * 100)
+    );
+
+    // Deduplicate and filter valid comment markers inside video duration
+    const uniqueCommentMarkers = Array.from(new Set(commentSeconds)).filter(
+      (sec) => Number.isFinite(sec) && sec >= 0 && sec <= effectiveDuration
+    );
 
     return (
       <div className="w-full flex flex-col items-center">
-        {/* Aspect Ratio Switch Bar for Vertical (9:16) vs Horizontal (16:9) */}
-        <div className="w-full max-w-[380px] flex items-center justify-between mb-2.5 px-1">
-          <div className="flex items-center gap-2 text-xs text-slate-400">
-            <span className="font-mono tabular-nums text-slate-200 font-medium">
-              {formatVideoTimestamp(currentTime)}
-            </span>
-            <span aria-hidden="true">/</span>
-            <span className="font-mono tabular-nums">
-              {duration > 0 ? formatVideoTimestamp(duration) : '00:15'}
-            </span>
-          </div>
-
-          <button
-            type="button"
-            onClick={() => setIsVerticalFrame((prev) => !prev)}
-            className="min-h-[36px] inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-slate-300 bg-slate-900 border border-slate-800 hover:border-slate-700 hover:text-white transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-            title="Cambiar proporción del marco de vista previa"
-          >
-            {isVerticalFrame ? (
-              <>
-                <Smartphone className="w-3.5 h-3.5 text-sky-400" />
-                <span>Vertical 9:16</span>
-              </>
-            ) : (
-              <>
-                <Monitor className="w-3.5 h-3.5 text-sky-400" />
-                <span>Horizontal 16:9</span>
-              </>
-            )}
-          </button>
-        </div>
-
-        {/* Main Video Stage */}
+        {/* Vertical 9:16 Video Container (also acts as the Fullscreen root so Watermark & Custom Controls remain visible in Fullscreen) */}
         <div
-          className={`relative w-full overflow-hidden rounded-2xl bg-slate-950 border border-slate-800/90 shadow-2xl transition-all ${
-            isVerticalFrame
-              ? 'max-w-[360px] sm:max-w-[380px] aspect-[9/16]'
-              : 'max-w-3xl aspect-video'
+          ref={stageRef}
+          onMouseMove={resetControlsTimer}
+          onMouseEnter={resetControlsTimer}
+          onTouchStart={resetControlsTimer}
+          onContextMenu={(e) => e.preventDefault()}
+          className={`relative overflow-hidden bg-black select-none ${
+            isFullscreen
+              ? 'w-screen h-screen flex items-center justify-center rounded-none'
+              : 'w-full max-w-[360px] sm:max-w-[380px] aspect-[9/16] rounded-2xl'
           }`}
           data-testid="video-stage"
         >
-          {parsedSource.type === 'invalid' && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center bg-slate-900/90">
+          {parsedSource.type === 'invalid' ? (
+            <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center bg-black">
               <AlertCircle className="w-8 h-8 text-rose-400 mb-3" />
               <p className="text-sm font-medium text-slate-200 mb-1">
-                Enlace de video no válido
+                Enlace de video .mp4 no válido
               </p>
               <p className="text-xs text-slate-400">{parsedSource.reason}</p>
             </div>
-          )}
-
-          {parsedSource.type === 'mp4' && !useFallbackReel && (
+          ) : (
             <video
-              ref={html5VideoRef}
+              ref={videoRef}
               src={parsedSource.src}
-              className="w-full h-full object-contain bg-black cursor-pointer"
               playsInline
               preload="metadata"
-              onClick={togglePlayMp4}
+              controlsList="nodownload noplaybackrate noremoteplayback"
+              disablePictureInPicture
+              onContextMenu={(e) => e.preventDefault()}
+              onClick={togglePlay}
               onTimeUpdate={(e) => {
                 const t = e.currentTarget.currentTime;
                 setCurrentTime(t);
@@ -417,111 +305,126 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
                 }
               }}
               onLoadedMetadata={(e) => {
-                setDuration(e.currentTarget.duration || 15);
-                setMediaError(null);
+                if (
+                  Number.isFinite(e.currentTarget.duration) &&
+                  e.currentTarget.duration > 0
+                ) {
+                  setDuration(e.currentTarget.duration);
+                }
               }}
               onPlay={() => setIsPlaying(true)}
               onPause={() => setIsPlaying(false)}
+              onEnded={() => setIsPlaying(false)}
               onError={() => {
-                setUseFallbackReel(true);
-                setDuration(15);
-                setMediaError(null);
+                setUseSimulatedClock(true);
               }}
+              className={`cursor-pointer bg-black ${
+                isFullscreen
+                  ? 'h-full aspect-[9/16] max-w-full object-cover'
+                  : 'w-full h-full object-cover'
+              }`}
             />
           )}
 
-          {parsedSource.type === 'mp4' && useFallbackReel && (
-            <div
-              onClick={togglePlayMp4}
-              className="w-full h-full cursor-pointer select-none relative flex flex-col justify-between p-6 bg-gradient-to-br from-slate-900 via-sky-950/70 to-slate-950"
-            >
-              <div className="flex items-center justify-between text-xs text-slate-300/80 font-mono tabular-nums">
-                <span>REEL 9:16 · HD</span>
-                <span>{formatVideoTimestamp(currentTime)}</span>
-              </div>
-
-              <div className="my-auto text-center space-y-3 px-2">
-                <div className="w-16 h-16 mx-auto rounded-2xl bg-sky-500/15 border border-sky-400/30 flex items-center justify-center text-sky-300 shadow-inner">
-                  {isPlaying ? (
-                    <Pause className="w-7 h-7" />
-                  ) : (
-                    <Play className="w-7 h-7 fill-current ml-0.5" />
-                  )}
-                </div>
-                <div className="space-y-1">
-                  <p className="text-xs font-mono uppercase tracking-wider text-sky-300/90">
-                    Fotograma {formatVideoTimestamp(currentTime)}
-                  </p>
-                  <p className="text-base font-bold text-white leading-snug">
-                    {currentTime < 5
-                      ? 'Escena 01 · Apertura & Logo en Movimiento'
-                      : currentTime < 10
-                      ? 'Escena 02 · Detalle de Producto & Oferta 20%'
-                      : 'Escena 03 · Cierre & Llamado a la Acción'}
-                  </p>
-                </div>
-              </div>
-
-              <div className="h-12" />
-            </div>
-          )}
-
-          {parsedSource.type === 'youtube' && (
-            <div
-              ref={ytContainerRef}
-              className="w-full h-full [&>iframe]:w-full [&>iframe]:h-full"
-            />
-          )}
-
-          {/* Optional Semi-Transparent Watermark Overlay */}
+          {/* Diagonal Repeated Semi-Transparent Watermark Overlay (pointer-events-none, stays visible in fullscreen) */}
           {watermarkEnabled && watermarkText.trim().length > 0 && (
             <div
               className="pointer-events-none select-none absolute inset-0 z-20 flex flex-col items-center justify-center overflow-hidden p-4"
               aria-label={`Marca de agua: ${watermarkText}`}
               data-testid="video-watermark"
             >
-              <div className="-rotate-24 flex flex-col items-center gap-12 opacity-30">
-                <span className="text-lg sm:text-xl font-bold tracking-widest uppercase text-white drop-shadow-[0_2px_6px_rgba(0,0,0,0.9)] whitespace-nowrap">
-                  {watermarkText}
-                </span>
-                <span className="text-xl sm:text-2xl font-bold tracking-widest uppercase text-white drop-shadow-[0_2px_6px_rgba(0,0,0,0.9)] whitespace-nowrap">
-                  {watermarkText}
-                </span>
-                <span className="text-lg sm:text-xl font-bold tracking-widest uppercase text-white drop-shadow-[0_2px_6px_rgba(0,0,0,0.9)] whitespace-nowrap">
-                  {watermarkText}
-                </span>
+              <div className="-rotate-24 flex flex-col items-center gap-14 opacity-25">
+                {Array.from({ length: 5 }).map((_, idx) => (
+                  <span
+                    key={idx}
+                    className="text-base sm:text-lg font-bold tracking-widest uppercase text-white drop-shadow-[0_2px_6px_rgba(0,0,0,0.85)] whitespace-nowrap"
+                  >
+                    {watermarkText} &nbsp;·&nbsp; {watermarkText}
+                  </span>
+                ))}
               </div>
             </div>
           )}
 
-          {/* Error banner if media failed */}
-          {mediaError && (
-            <div className="absolute inset-x-3 top-3 z-30 bg-rose-950/90 border border-rose-500/40 rounded-xl p-3 text-xs text-rose-200 flex items-start gap-2">
-              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-              <span>{mediaError}</span>
-            </div>
-          )}
-
-          {/* Custom bottom bar for direct MP4 videos */}
+          {/* Custom Minimalist Bottom Controls (Auto-hide after 2s of mouse inactivity) */}
           {parsedSource.type === 'mp4' && (
-            <div className="absolute inset-x-0 bottom-0 z-30 bg-gradient-to-t from-black/90 via-black/60 to-transparent pt-8 pb-3 px-3 flex flex-col gap-2">
-              <input
-                type="range"
-                min={0}
-                max={duration > 0 ? Math.ceil(duration) : 15}
-                step={0.1}
-                value={currentTime}
-                onChange={handleScrub}
-                aria-label="Línea de tiempo del video"
-                className="w-full accent-sky-400 h-1.5 bg-slate-700 rounded-lg cursor-pointer"
-              />
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-1">
+            <div
+              onClick={(e) => e.stopPropagation()}
+              data-testid="custom-video-controls"
+              data-visible={controlsVisible ? 'true' : 'false'}
+              className={`absolute inset-x-0 bottom-0 z-30 bg-gradient-to-t from-black/90 via-black/55 to-transparent pt-8 pb-3 px-3.5 flex flex-col gap-2.5 transition-opacity duration-200 ${
+                controlsVisible
+                  ? 'opacity-100'
+                  : 'opacity-0 pointer-events-none'
+              }`}
+            >
+              {/* Draggable Progress Bar with Comment Timestamp Markers */}
+              <div
+                ref={progressBarRef}
+                role="slider"
+                tabIndex={0}
+                aria-label="Barra de progreso del video"
+                aria-valuemin={0}
+                aria-valuemax={Math.ceil(effectiveDuration)}
+                aria-valuenow={Math.floor(currentTime)}
+                onPointerDown={handleProgressPointerDown}
+                onPointerMove={handleProgressPointerMove}
+                onPointerUp={handleProgressPointerUp}
+                onPointerCancel={handleProgressPointerUp}
+                onKeyDown={(e) => {
+                  resetControlsTimer();
+                  if (e.key === 'ArrowRight') {
+                    e.preventDefault();
+                    seekTo(currentTime + 1);
+                  } else if (e.key === 'ArrowLeft') {
+                    e.preventDefault();
+                    seekTo(currentTime - 1);
+                  }
+                }}
+                className="relative w-full h-5 flex items-center cursor-pointer group touch-none"
+                data-testid="video-progress-bar"
+              >
+                {/* Track background */}
+                <div className="relative w-full h-1.5 group-hover:h-2 bg-white/25 rounded-full overflow-visible transition-all">
+                  {/* Filled progress */}
+                  <div
+                    className="absolute inset-y-0 left-0 bg-sky-400 rounded-full"
+                    style={{ width: `${progressPercent}%` }}
+                  />
+
+                  {/* Small markers at seconds where comments exist */}
+                  {uniqueCommentMarkers.map((sec) => {
+                    const leftPct = Math.max(
+                      0,
+                      Math.min(100, (sec / effectiveDuration) * 100)
+                    );
+                    return (
+                      <span
+                        key={sec}
+                        title={`Comentario en ${formatVideoTimestamp(sec)}`}
+                        data-testid="comment-timeline-marker"
+                        style={{ left: `${leftPct}%` }}
+                        className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-1.5 h-2.5 rounded-full bg-amber-300 ring-1 ring-black/80 pointer-events-none z-10"
+                      />
+                    );
+                  })}
+
+                  {/* Scrubber thumb */}
+                  <span
+                    style={{ left: `${progressPercent}%` }}
+                    className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3.5 h-3.5 rounded-full bg-white shadow-md z-20 transition-transform group-hover:scale-110"
+                  />
+                </div>
+              </div>
+
+              {/* Bottom Control Row: Play/Pause, Current Time / Duration, Mute, Fullscreen */}
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5">
                   <button
                     type="button"
-                    onClick={togglePlayMp4}
+                    onClick={togglePlay}
                     aria-label={isPlaying ? 'Pausar video' : 'Reproducir video'}
-                    className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-xl text-white hover:bg-white/10 transition-colors"
+                    className="min-h-[40px] min-w-[40px] inline-flex items-center justify-center rounded-xl text-white hover:bg-white/15 transition-colors cursor-pointer"
                   >
                     {isPlaying ? (
                       <Pause className="w-5 h-5" />
@@ -529,11 +432,22 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
                       <Play className="w-5 h-5 fill-current" />
                     )}
                   </button>
+
+                  <span
+                    className="font-mono tabular-nums text-xs text-slate-200 select-none px-1"
+                    data-testid="video-time-display"
+                  >
+                    {formatVideoTimestamp(currentTime)} /{' '}
+                    {formatVideoTimestamp(effectiveDuration)}
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-1">
                   <button
                     type="button"
-                    onClick={toggleMuteMp4}
+                    onClick={toggleMute}
                     aria-label={isMuted ? 'Activar sonido' : 'Silenciar video'}
-                    className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-xl text-slate-200 hover:bg-white/10 transition-colors"
+                    className="min-h-[40px] min-w-[40px] inline-flex items-center justify-center rounded-xl text-slate-200 hover:bg-white/15 transition-colors cursor-pointer"
                   >
                     {isMuted ? (
                       <VolumeX className="w-5 h-5 text-rose-400" />
@@ -541,38 +455,28 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
                       <Volume2 className="w-5 h-5" />
                     )}
                   </button>
-                </div>
 
-                <span className="font-mono tabular-nums text-xs text-slate-200 px-2">
-                  {formatVideoTimestamp(currentTime)} /{' '}
-                  {formatVideoTimestamp(duration || 15)}
-                </span>
+                  <button
+                    type="button"
+                    onClick={toggleFullscreen}
+                    aria-label={
+                      isFullscreen
+                        ? 'Salir de pantalla completa'
+                        : 'Pantalla completa'
+                    }
+                    className="min-h-[40px] min-w-[40px] inline-flex items-center justify-center rounded-xl text-slate-200 hover:bg-white/15 transition-colors cursor-pointer"
+                  >
+                    {isFullscreen ? (
+                      <Minimize className="w-4 h-4" />
+                    ) : (
+                      <Maximize className="w-4 h-4" />
+                    )}
+                  </button>
+                </div>
               </div>
             </div>
           )}
         </div>
-
-        {/* Helpful timeline scrubber bar for YouTube or quick second testing */}
-        {parsedSource.type === 'youtube' && (
-          <div className="w-full max-w-[380px] mt-3 bg-slate-900/80 border border-slate-800 rounded-xl px-3 py-2 flex items-center gap-3">
-            <span className="text-xs text-slate-400 whitespace-nowrap">
-              Saltar a segundo:
-            </span>
-            <input
-              type="range"
-              min={0}
-              max={duration > 0 ? Math.ceil(duration) : 60}
-              step={1}
-              value={Math.floor(currentTime)}
-              onChange={handleScrub}
-              aria-label="Saltar a segundo en YouTube"
-              className="w-full accent-sky-400 h-1.5 bg-slate-700 rounded-lg cursor-pointer"
-            />
-            <span className="font-mono tabular-nums text-xs text-sky-300 font-medium whitespace-nowrap">
-              {formatVideoTimestamp(currentTime)}
-            </span>
-          </div>
-        )}
       </div>
     );
   }

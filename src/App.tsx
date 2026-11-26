@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   onAuthStateChanged,
   signInWithPopup,
@@ -18,7 +18,6 @@ import {
   serverTimestamp,
   Timestamp,
 } from 'firebase/firestore';
-import { Copy, Check, AlertCircle } from 'lucide-react';
 import {
   auth,
   db,
@@ -33,21 +32,14 @@ import {
   VideoComment,
 } from './types';
 import {
-  DEMO_PROJECT_ID,
-  loadDemoProjects,
-  saveDemoProjects,
-  loadDemoComments,
-  saveDemoComments,
-} from './data/demoSeed';
-import {
   isAuthorizedAdminUser,
-  isValidId,
+  generateSecureProjectId,
+  parseRoutePath,
+  AppRoute,
 } from './utils/validation';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ClientReviewView } from './components/ClientReviewView';
 import { AdminDashboardView } from './components/AdminDashboardView';
-
-type ActiveScreen = 'client' | 'admin';
 
 function toDate(val: unknown): Date {
   if (val instanceof Timestamp) {
@@ -64,164 +56,57 @@ function toDate(val: unknown): Date {
 }
 
 export function AppContent() {
-  const [activeScreen, setActiveScreen] = useState<ActiveScreen>(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('view') === 'admin') return 'admin';
-    return 'client';
-  });
+  const [route] = useState<AppRoute>(() =>
+    parseRoutePath(window.location.pathname)
+  );
 
-  const [activeProjectId, setActiveProjectId] = useState<string>(() => {
-    const params = new URLSearchParams(window.location.search);
-    const p = params.get('p');
-    return p && isValidId(p) ? p : DEMO_PROJECT_ID;
-  });
-
+  // Admin Zone State (only used when route.view === 'admin')
   const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(null);
   const [authReady, setAuthReady] = useState<boolean>(false);
-  const [isDemoAdmin, setIsDemoAdmin] = useState<boolean>(() => {
-    const params = new URLSearchParams(window.location.search);
-    return params.get('demo_admin') === '1';
-  });
+  const [unauthorizedDenied, setUnauthorizedDenied] = useState<boolean>(false);
+  const [adminProjects, setAdminProjects] = useState<Project[]>([]);
+  const [selectedAdminProjectId, setSelectedAdminProjectId] = useState<
+    string | null
+  >(null);
+  const [adminComments, setAdminComments] = useState<VideoComment[]>([]);
 
-  // Local Demo State (always available for demo projects or demo admin preview)
-  const [demoProjects, setDemoProjects] = useState<Project[]>(() =>
-    loadDemoProjects()
-  );
-  const [demoComments, setDemoComments] = useState<VideoComment[]>(() =>
-    loadDemoComments()
-  );
+  // Client Page State (only used when route.view === 'client')
+  const [clientProject, setClientProject] = useState<Project | null>(null);
+  const [clientComments, setClientComments] = useState<VideoComment[]>([]);
+  const [loadingClientProject, setLoadingClientProject] =
+    useState<boolean>(true);
+  const [clientLinkInvalid, setClientLinkInvalid] = useState<boolean>(false);
 
-  // Firestore State
-  const [firestoreProjects, setFirestoreProjects] = useState<Project[]>([]);
-  const [singleFirestoreProject, setSingleFirestoreProject] =
-    useState<Project | null>(null);
-  const [firestoreComments, setFirestoreComments] = useState<VideoComment[]>([]);
-  const [loadingProject, setLoadingProject] = useState<boolean>(false);
-  const [projectNotFound, setProjectNotFound] = useState<boolean>(false);
-  const [headerLinkCopied, setHeaderLinkCopied] = useState<boolean>(false);
-
-  // Sync URL query parameter when switching projects
-  const updateUrlProjectParam = useCallback(
-    (projectId: string, screen: ActiveScreen) => {
-      const url = new URL(window.location.href);
-      if (screen === 'client') {
-        url.searchParams.set('p', projectId);
-        url.searchParams.delete('view');
-      } else {
-        url.searchParams.set('view', 'admin');
-      }
-      window.history.replaceState({}, '', url.toString());
-    },
-    []
-  );
-
-  // Track Firebase Auth state
+  // 1) ADMIN ZONE AUTH & DATA ("/")
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (user) => {
+    if (route.view !== 'admin') return;
+
+    const unsub = onAuthStateChanged(auth, async (user) => {
+      if (user && !isAuthorizedAdminUser(user)) {
+        // Any account other than chat.gpt.sandoval@gmail.com sees "Sin acceso" and is signed out immediately
+        setUnauthorizedDenied(true);
+        setCurrentUser(null);
+        setAuthReady(true);
+        await signOut(auth);
+        return;
+      }
+      if (user && isAuthorizedAdminUser(user)) {
+        setUnauthorizedDenied(false);
+      }
       setCurrentUser(user);
       setAuthReady(true);
     });
+
     return () => unsub();
-  }, []);
+  }, [route.view]);
 
-  const isRealAdmin = authReady && isAuthorizedAdminUser(currentUser);
-  const isCurrentProjectDemo = demoProjects.some(
-    (p) => p.id === activeProjectId
-  );
+  const isRealAdmin =
+    route.view === 'admin' && authReady && isAuthorizedAdminUser(currentUser);
 
-  // Listen to single Firestore project & its comments when viewing a non-demo project
-  useEffect(() => {
-    if (isCurrentProjectDemo) {
-      setProjectNotFound(false);
-      setLoadingProject(false);
-      return;
-    }
-
-    if (!isValidId(activeProjectId)) {
-      setProjectNotFound(true);
-      return;
-    }
-
-    setLoadingProject(true);
-    setProjectNotFound(false);
-
-    const projectPath = `projects/${activeProjectId}`;
-    const unsubProject = onSnapshot(
-      doc(db, 'projects', activeProjectId),
-      (snap) => {
-        setLoadingProject(false);
-        if (!snap.exists()) {
-          setSingleFirestoreProject(null);
-          setProjectNotFound(true);
-          return;
-        }
-        const data = snap.data();
-        setSingleFirestoreProject({
-          id: snap.id,
-          title: String(data.title || ''),
-          clientName: String(data.clientName || ''),
-          videoUrl: String(data.videoUrl || ''),
-          price: Number(data.price || 0),
-          currency: data.currency === '$' ? '$' : 'S/',
-          showPrice: Boolean(data.showPrice),
-          watermarkEnabled: Boolean(data.watermarkEnabled),
-          watermarkText: String(data.watermarkText || ''),
-          status:
-            data.status === 'Aprobado' || data.status === 'Cambios solicitados'
-              ? data.status
-              : 'En revisión',
-          whatsappNumber: String(data.whatsappNumber || ''),
-          createdAt: toDate(data.createdAt),
-          updatedAt: toDate(data.updatedAt),
-        });
-        setProjectNotFound(false);
-      },
-      (error) => {
-        setLoadingProject(false);
-        handleFirestoreError(error, OperationType.GET, projectPath);
-      }
-    );
-
-    const commentsQuery = query(
-      collection(db, 'comments'),
-      where('projectId', '==', activeProjectId)
-    );
-    const unsubComments = onSnapshot(
-      commentsQuery,
-      (snap) => {
-        const list: VideoComment[] = snap.docs.map((d) => {
-          const data = d.data();
-          return {
-            id: d.id,
-            projectId: String(data.projectId || activeProjectId),
-            authorName: String(data.authorName || 'Cliente'),
-            text: String(data.text || ''),
-            videoSecond: Number(data.videoSecond || 0),
-            createdAt: toDate(data.createdAt),
-            resolved: Boolean(data.resolved),
-          };
-        });
-        setFirestoreComments(list);
-      },
-      (error) => {
-        handleFirestoreError(
-          error,
-          OperationType.LIST,
-          `comments?projectId=${activeProjectId}`
-        );
-      }
-    );
-
-    return () => {
-      unsubProject();
-      unsubComments();
-    };
-  }, [activeProjectId, isCurrentProjectDemo]);
-
-  // Listen to full Firestore projects collection ONLY when authenticated as the authorized Admin
+  // Listen to all projects in Firestore when Admin is signed in
   useEffect(() => {
     if (!isRealAdmin) {
-      setFirestoreProjects([]);
+      setAdminProjects([]);
       return;
     }
 
@@ -250,7 +135,12 @@ export function AppContent() {
           };
         });
         list.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
-        setFirestoreProjects(list);
+        setAdminProjects(list);
+        setSelectedAdminProjectId((prev) =>
+          prev && list.some((p) => p.id === prev)
+            ? prev
+            : list[0]?.id || null
+        );
       },
       (error) => {
         handleFirestoreError(error, OperationType.LIST, 'projects');
@@ -260,36 +150,134 @@ export function AppContent() {
     return () => unsub();
   }, [isRealAdmin]);
 
-  // Combined project & comments selection
-  const activeClientProject: Project | null = isCurrentProjectDemo
-    ? demoProjects.find((p) => p.id === activeProjectId) || null
-    : singleFirestoreProject;
-
-  const activeClientComments: VideoComment[] = isCurrentProjectDemo
-    ? demoComments.filter((c) => c.projectId === activeProjectId)
-    : firestoreComments;
-
-  const adminProjectsList: Project[] = isRealAdmin
-    ? firestoreProjects
-    : demoProjects;
-
-  // Handlers for Client View
-  const handleClientUpdateStatus = async (newStatus: ProjectStatus) => {
-    if (isCurrentProjectDemo) {
-      const updated = demoProjects.map((p) =>
-        p.id === activeProjectId
-          ? { ...p, status: newStatus, updatedAt: new Date() }
-          : p
-      );
-      setDemoProjects(updated);
-      saveDemoProjects(updated);
+  // Listen to comments for the selected project in Admin Zone
+  useEffect(() => {
+    if (!isRealAdmin || !selectedAdminProjectId) {
+      setAdminComments([]);
       return;
     }
 
-    const path = `projects/${activeProjectId}`;
+    const q = query(
+      collection(db, 'comments'),
+      where('projectId', '==', selectedAdminProjectId)
+    );
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const list: VideoComment[] = snap.docs.map((d) => {
+          const data = d.data();
+          return {
+            id: d.id,
+            projectId: String(data.projectId || selectedAdminProjectId),
+            authorName: String(data.authorName || 'Cliente'),
+            text: String(data.text || ''),
+            videoSecond: Number(data.videoSecond || 0),
+            createdAt: toDate(data.createdAt),
+            resolved: Boolean(data.resolved),
+          };
+        });
+        setAdminComments(list);
+      },
+      (error) => {
+        handleFirestoreError(
+          error,
+          OperationType.LIST,
+          `comments?projectId=${selectedAdminProjectId}`
+        );
+      }
+    );
+
+    return () => unsub();
+  }, [isRealAdmin, selectedAdminProjectId]);
+
+  // 2) INDEPENDENT CLIENT PAGE ("/ver/ID_DEL_PROYECTO")
+  useEffect(() => {
+    if (route.view !== 'client') return;
+    const { projectId } = route;
+
+    setLoadingClientProject(true);
+    setClientLinkInvalid(false);
+
+    const projectPath = `projects/${projectId}`;
+    const unsubProject = onSnapshot(
+      doc(db, 'projects', projectId),
+      (snap) => {
+        setLoadingClientProject(false);
+        if (!snap.exists()) {
+          setClientProject(null);
+          setClientLinkInvalid(true);
+          return;
+        }
+        const data = snap.data();
+        setClientProject({
+          id: snap.id,
+          title: String(data.title || ''),
+          clientName: String(data.clientName || ''),
+          videoUrl: String(data.videoUrl || ''),
+          price: Number(data.price || 0),
+          currency: data.currency === '$' ? '$' : 'S/',
+          showPrice: Boolean(data.showPrice),
+          watermarkEnabled: Boolean(data.watermarkEnabled),
+          watermarkText: String(data.watermarkText || ''),
+          status:
+            data.status === 'Aprobado' || data.status === 'Cambios solicitados'
+              ? data.status
+              : 'En revisión',
+          whatsappNumber: String(data.whatsappNumber || ''),
+          createdAt: toDate(data.createdAt),
+          updatedAt: toDate(data.updatedAt),
+        });
+        setClientLinkInvalid(false);
+      },
+      () => {
+        setLoadingClientProject(false);
+        setClientProject(null);
+        setClientLinkInvalid(true);
+      }
+    );
+
+    const commentsQuery = query(
+      collection(db, 'comments'),
+      where('projectId', '==', projectId)
+    );
+    const unsubComments = onSnapshot(
+      commentsQuery,
+      (snap) => {
+        const list: VideoComment[] = snap.docs.map((d) => {
+          const data = d.data();
+          return {
+            id: d.id,
+            projectId: String(data.projectId || projectId),
+            authorName: String(data.authorName || 'Cliente'),
+            text: String(data.text || ''),
+            videoSecond: Number(data.videoSecond || 0),
+            createdAt: toDate(data.createdAt),
+            resolved: Boolean(data.resolved),
+          };
+        });
+        setClientComments(list);
+      },
+      (error) => {
+        handleFirestoreError(
+          error,
+          OperationType.LIST,
+          `comments?projectId=${projectId}`
+        );
+      }
+    );
+
+    return () => {
+      unsubProject();
+      unsubComments();
+    };
+  }, [route]);
+
+  // Client Actions
+  const handleClientUpdateStatus = async (newStatus: ProjectStatus) => {
+    if (route.view !== 'client') return;
+    const path = `projects/${route.projectId}`;
     try {
-      // Firestore rule allows anyone with the link to update ONLY the 'status' field
-      await updateDoc(doc(db, 'projects', activeProjectId), {
+      await updateDoc(doc(db, 'projects', route.projectId), {
         status: newStatus,
       });
     } catch (error) {
@@ -302,6 +290,7 @@ export function AppContent() {
     text: string;
     videoSecond: number;
   }) => {
+    if (route.view !== 'client') return;
     const safeAuthor = payload.authorName.trim().slice(0, 80);
     const safeText = payload.text.trim().slice(0, 1000);
     const safeSecond = Math.max(
@@ -309,29 +298,11 @@ export function AppContent() {
       Math.min(86400, Math.floor(payload.videoSecond))
     );
 
-    if (isCurrentProjectDemo) {
-      const newComment: VideoComment = {
-        id: `demo-c-${Date.now()}`,
-        projectId: activeProjectId,
-        authorName: safeAuthor,
-        text: safeText,
-        videoSecond: safeSecond,
-        createdAt: new Date(),
-        resolved: false,
-      };
-      const updated = [...demoComments, newComment];
-      setDemoComments(updated);
-      saveDemoComments(updated);
-      return;
-    }
-
-    const commentId = `comm_${Date.now()}_${Math.random()
-      .toString(36)
-      .slice(2, 8)}`;
+    const commentId = generateSecureProjectId(24);
     const path = `comments/${commentId}`;
     try {
       await setDoc(doc(db, 'comments', commentId), {
-        projectId: activeProjectId,
+        projectId: route.projectId,
         authorName: safeAuthor,
         text: safeText,
         videoSecond: safeSecond,
@@ -343,39 +314,25 @@ export function AppContent() {
     }
   };
 
-  // Handlers for Admin Panel
+  // Admin Actions
   const handleSignInGoogle = async () => {
-    await signInWithPopup(auth, googleProvider);
+    setUnauthorizedDenied(false);
+    const cred = await signInWithPopup(auth, googleProvider);
+    if (cred.user && !isAuthorizedAdminUser(cred.user)) {
+      setUnauthorizedDenied(true);
+      await signOut(auth);
+    }
   };
 
   const handleSignOut = async () => {
     await signOut(auth);
-    setIsDemoAdmin(false);
   };
 
   const handleAdminCreateProject = async (
     input: ProjectFormInput
   ): Promise<string> => {
-    const newId = `proj_${Date.now()}_${Math.random()
-      .toString(36)
-      .slice(2, 7)}`;
-
-    if (!isRealAdmin) {
-      const now = new Date();
-      const created: Project = {
-        id: newId,
-        ...input,
-        createdAt: now,
-        updatedAt: now,
-        isDemo: true,
-      };
-      const updated = [created, ...demoProjects];
-      setDemoProjects(updated);
-      saveDemoProjects(updated);
-      setActiveProjectId(newId);
-      return newId;
-    }
-
+    // Cryptographically random code of 28 characters (>= 20 chars requirement)
+    const newId = generateSecureProjectId(28);
     const path = `projects/${newId}`;
     try {
       await setDoc(doc(db, 'projects', newId), {
@@ -392,7 +349,7 @@ export function AppContent() {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
-      setActiveProjectId(newId);
+      setSelectedAdminProjectId(newId);
       return newId;
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, path);
@@ -403,21 +360,6 @@ export function AppContent() {
     projectId: string,
     input: ProjectFormInput
   ) => {
-    if (!isRealAdmin || demoProjects.some((p) => p.id === projectId)) {
-      const updated = demoProjects.map((p) =>
-        p.id === projectId
-          ? {
-              ...p,
-              ...input,
-              updatedAt: new Date(),
-            }
-          : p
-      );
-      setDemoProjects(updated);
-      saveDemoProjects(updated);
-      return;
-    }
-
     const path = `projects/${projectId}`;
     try {
       await updateDoc(doc(db, 'projects', projectId), {
@@ -439,24 +381,8 @@ export function AppContent() {
   };
 
   const handleAdminDeleteProject = async (projectId: string) => {
-    if (!isRealAdmin || demoProjects.some((p) => p.id === projectId)) {
-      const remaining = demoProjects.filter((p) => p.id !== projectId);
-      const remainingComments = demoComments.filter(
-        (c) => c.projectId !== projectId
-      );
-      setDemoProjects(remaining);
-      saveDemoProjects(remaining);
-      setDemoComments(remainingComments);
-      saveDemoComments(remainingComments);
-      if (remaining[0]) {
-        setActiveProjectId(remaining[0].id);
-      }
-      return;
-    }
-
     const path = `projects/${projectId}`;
     try {
-      // Delete associated comments first
       const q = query(
         collection(db, 'comments'),
         where('projectId', '==', projectId)
@@ -466,10 +392,8 @@ export function AppContent() {
         await deleteDoc(doc(db, 'comments', commentDoc.id));
       }
       await deleteDoc(doc(db, 'projects', projectId));
-      const nextProj = firestoreProjects.find((p) => p.id !== projectId);
-      if (nextProj) {
-        setActiveProjectId(nextProj.id);
-      }
+      const nextProj = adminProjects.find((p) => p.id !== projectId);
+      setSelectedAdminProjectId(nextProj ? nextProj.id : null);
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, path);
     }
@@ -479,15 +403,6 @@ export function AppContent() {
     commentId: string,
     currentResolved: boolean
   ) => {
-    if (!isRealAdmin || demoComments.some((c) => c.id === commentId)) {
-      const updated = demoComments.map((c) =>
-        c.id === commentId ? { ...c, resolved: !currentResolved } : c
-      );
-      setDemoComments(updated);
-      saveDemoComments(updated);
-      return;
-    }
-
     const path = `comments/${commentId}`;
     try {
       await updateDoc(doc(db, 'comments', commentId), {
@@ -498,153 +413,63 @@ export function AppContent() {
     }
   };
 
-  const handleCopyCurrentClientUrl = async () => {
-    const shareUrl = `${window.location.origin}${window.location.pathname}?p=${encodeURIComponent(
-      activeProjectId
-    )}`;
-    try {
-      await navigator.clipboard.writeText(shareUrl);
-    } catch {
-      // Fallback ignore
-    }
-    setHeaderLinkCopied(true);
-    window.setTimeout(() => setHeaderLinkCopied(false), 2500);
-  };
+  // RENDER 1: Invalid Link or non-existent project on /ver/ID_DEL_PROYECTO -> Simple "Enlace no válido"
+  if (
+    route.view === 'invalid-client-link' ||
+    (route.view === 'client' && !loadingClientProject && (clientLinkInvalid || !clientProject))
+  ) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-6">
+        <p className="text-base font-medium text-slate-300" data-testid="invalid-link-message">
+          Enlace no válido
+        </p>
+      </div>
+    );
+  }
 
-  return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
-      {/* Strict 3-Zone Top Bar Contract */}
-      <header className="sticky top-0 z-40 flex items-center justify-between gap-2 sm:gap-8 px-3 sm:px-6 h-14 bg-slate-950/90 backdrop-blur-md border-b border-slate-800/90">
-        {/* Zone 1: Single text element wordmark */}
-        <a
-          href={`?p=${encodeURIComponent(activeProjectId)}`}
-          onClick={(e) => {
-            e.preventDefault();
-            setActiveScreen('client');
-            updateUrlProjectParam(activeProjectId, 'client');
-          }}
-          className="text-sm sm:text-lg font-bold tracking-tight text-white whitespace-nowrap shrink-0"
-        >
-          ClipReview
-        </a>
-
-        {/* Zone 2: Clean single-line text navigation links */}
-        <nav className="flex items-center gap-3 sm:gap-6 text-xs sm:text-sm font-medium text-slate-400">
-          <button
-            type="button"
-            onClick={() => {
-              setActiveScreen('client');
-              updateUrlProjectParam(activeProjectId, 'client');
-            }}
-            className={`py-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-              activeScreen === 'client'
-                ? 'text-white underline underline-offset-8 decoration-sky-400 decoration-2'
-                : 'hover:text-slate-200'
-            }`}
-          >
-            Cliente
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              setActiveScreen('admin');
-              updateUrlProjectParam(activeProjectId, 'admin');
-            }}
-            className={`py-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-              activeScreen === 'admin'
-                ? 'text-white underline underline-offset-8 decoration-sky-400 decoration-2'
-                : 'hover:text-slate-200'
-            }`}
-          >
-            Admin
-          </button>
-        </nav>
-
-        {/* Zone 3: 1 Primary Action */}
-        <div className="flex items-center shrink-0">
-          <button
-            type="button"
-            onClick={handleCopyCurrentClientUrl}
-            className="min-h-[38px] px-2.5 sm:px-3.5 py-1.5 text-xs font-medium text-slate-100 bg-slate-900 hover:bg-slate-800 border border-slate-700/80 rounded-xl inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-          >
-            {headerLinkCopied ? (
-              <>
-                <Check className="w-3.5 h-3.5 text-emerald-400" />
-                <span className="text-emerald-300">Copiado</span>
-              </>
-            ) : (
-              <>
-                <Copy className="w-3.5 h-3.5 text-sky-400" />
-                <span>Copiar enlace</span>
-              </>
-            )}
-          </button>
+  // RENDER 2: Independent Client Page (/ver/ID_DEL_PROYECTO) — Zero navigation bar, zero admin links, zero login or copy buttons
+  if (route.view === 'client') {
+    if (loadingClientProject || !clientProject) {
+      return (
+        <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-6">
+          <p className="text-sm text-slate-400">Cargando...</p>
         </div>
-      </header>
+      );
+    }
 
-      {/* Main Content Area */}
-      <main className="flex-1">
-        {activeScreen === 'client' ? (
-          loadingProject ? (
-            <div className="max-w-4xl mx-auto px-4 py-16 text-center">
-              <p className="text-sm text-slate-400">Cargando proyecto de video...</p>
-            </div>
-          ) : projectNotFound || !activeClientProject ? (
-            <div className="max-w-md mx-auto px-4 py-16">
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 text-center space-y-4">
-                <AlertCircle className="w-8 h-8 text-rose-400 mx-auto" />
-                <div className="space-y-1">
-                  <h2 className="text-lg font-bold text-white">
-                    Proyecto no encontrado
-                  </h2>
-                  <p className="text-xs text-slate-400 leading-relaxed">
-                    El enlace del proyecto no existe o fue eliminado por el administrador.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setActiveProjectId(DEMO_PROJECT_ID);
-                    updateUrlProjectParam(DEMO_PROJECT_ID, 'client');
-                  }}
-                  className="min-h-[44px] px-4 py-2.5 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold text-xs inline-flex items-center justify-center transition-colors cursor-pointer"
-                >
-                  Abrir proyecto de demostración
-                </button>
-              </div>
-            </div>
-          ) : (
-            <ClientReviewView
-              project={activeClientProject}
-              comments={activeClientComments}
-              onUpdateStatus={handleClientUpdateStatus}
-              onAddComment={handleClientAddComment}
-            />
-          )
-        ) : (
-          <AdminDashboardView
-            currentUser={currentUser}
-            authReady={authReady}
-            isDemoAdmin={isDemoAdmin}
-            onEnableDemoAdmin={() => setIsDemoAdmin(true)}
-            onSignInGoogle={handleSignInGoogle}
-            onSignOut={handleSignOut}
-            projects={adminProjectsList}
-            selectedProjectId={activeProjectId}
-            onSelectProject={(id) => setActiveProjectId(id)}
-            commentsForSelected={activeClientComments}
-            onCreateProject={handleAdminCreateProject}
-            onUpdateProject={handleAdminUpdateProject}
-            onDeleteProject={handleAdminDeleteProject}
-            onToggleCommentResolved={handleAdminToggleCommentResolved}
-            onOpenClientPreview={(id) => {
-              setActiveProjectId(id);
-              setActiveScreen('client');
-              updateUrlProjectParam(id, 'client');
-            }}
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100">
+        <main>
+          <ClientReviewView
+            project={clientProject}
+            comments={clientComments}
+            onUpdateStatus={handleClientUpdateStatus}
+            onAddComment={handleClientAddComment}
           />
-        )}
+        </main>
+      </div>
+    );
+  }
+
+  // RENDER 3: Admin Zone ("/")
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100">
+      <main>
+        <AdminDashboardView
+          currentUser={currentUser}
+          authReady={authReady}
+          unauthorizedDenied={unauthorizedDenied}
+          onSignInGoogle={handleSignInGoogle}
+          onSignOut={handleSignOut}
+          projects={adminProjects}
+          selectedProjectId={selectedAdminProjectId}
+          onSelectProject={(id) => setSelectedAdminProjectId(id)}
+          commentsForSelected={adminComments}
+          onCreateProject={handleAdminCreateProject}
+          onUpdateProject={handleAdminUpdateProject}
+          onDeleteProject={handleAdminDeleteProject}
+          onToggleCommentResolved={handleAdminToggleCommentResolved}
+        />
       </main>
     </div>
   );

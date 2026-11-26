@@ -19,11 +19,13 @@ import {
   buildWhatsAppApprovalUrl,
   getStatusVisuals,
 } from '../utils/video';
+import { formatReadableFirestoreError } from '../firebase';
 import { VideoPlayer, VideoPlayerHandle } from './VideoPlayer';
 
 interface ClientReviewViewProps {
   project: Project;
   comments: VideoComment[];
+  firestoreError?: string | null;
   onUpdateStatus: (newStatus: ProjectStatus) => Promise<void>;
   onAddComment: (payload: {
     authorName: string;
@@ -32,11 +34,10 @@ interface ClientReviewViewProps {
   }) => Promise<void>;
 }
 
-const CLIENT_NAME_STORAGE_KEY = 'clipreview_client_author_name';
-
 export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
   project,
   comments,
+  firestoreError,
   onUpdateStatus,
   onAddComment,
 }) => {
@@ -49,20 +50,8 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
   const [customTimeInput, setCustomTimeInput] = useState<string>('00:00');
   const [isComposerOpen, setIsComposerOpen] = useState<boolean>(false);
 
-  const [savedClientName, setSavedClientName] = useState<string>(() => {
-    try {
-      return localStorage.getItem(CLIENT_NAME_STORAGE_KEY) || '';
-    } catch {
-      return '';
-    }
-  });
-  const [authorNameInput, setAuthorNameInput] = useState<string>(() => {
-    try {
-      return localStorage.getItem(CLIENT_NAME_STORAGE_KEY) || '';
-    } catch {
-      return '';
-    }
-  });
+  const [savedClientName, setSavedClientName] = useState<string>('');
+  const [authorNameInput, setAuthorNameInput] = useState<string>('');
   const [isEditingName, setIsEditingName] = useState<boolean>(false);
   const [commentText, setCommentText] = useState<string>('');
   const [formError, setFormError] = useState<string | null>(null);
@@ -98,19 +87,16 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
     if (isUpdatingStatus) return;
     setIsUpdatingStatus(true);
     setStatusFeedback(null);
+    setFormError(null);
     try {
       await onUpdateStatus(newStatus);
       setStatusFeedback(
         newStatus === 'Aprobado'
-          ? '¡Video aprobado! Ahora puedes contactar para coordinar el pago y la entrega.'
+          ? 'Video aprobado. Ahora puedes contactar para coordinar el pago y la entrega.'
           : 'Estado actualizado a "Cambios solicitados".'
       );
     } catch (err) {
-      setFormError(
-        err instanceof Error
-          ? err.message
-          : 'No se pudo actualizar el estado del proyecto.'
-      );
+      setFormError(formatReadableFirestoreError(err));
     } finally {
       setIsUpdatingStatus(false);
     }
@@ -155,11 +141,6 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
         videoSecond: parsedSec,
       });
 
-      try {
-        localStorage.setItem(CLIENT_NAME_STORAGE_KEY, trimmedName);
-      } catch {
-        // Ignore storage error
-      }
       setSavedClientName(trimmedName);
       setAuthorNameInput(trimmedName);
       setIsEditingName(false);
@@ -167,9 +148,7 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
       setIsComposerOpen(false);
       setCapturedSecond(null);
     } catch (err) {
-      setFormError(
-        err instanceof Error ? err.message : 'No se pudo guardar el comentario.'
-      );
+      setFormError(formatReadableFirestoreError(err));
     } finally {
       setIsSubmittingComment(false);
     }
@@ -186,17 +165,27 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
 
   return (
     <div className="w-full max-w-6xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
+      {firestoreError && (
+        <div
+          className="mb-6 bg-[#111111] border border-white rounded-xl p-4 text-xs text-white flex items-start gap-2.5"
+          role="alert"
+        >
+          <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+          <span>{firestoreError}</span>
+        </div>
+      )}
+
       {/* Top Project Header Card */}
-      <section className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 sm:p-6 mb-6">
+      <section className="bg-[#111111] border border-[#2A2A2A] rounded-2xl p-4 sm:p-6 mb-6">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
           <div className="space-y-1.5 min-w-0">
-            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
+            <div className="flex flex-wrap items-center gap-2 text-xs text-neutral-400">
               <span>Cliente: {project.clientName}</span>
               {project.showPrice && (
                 <>
                   <span aria-hidden="true">·</span>
                   <span
-                    className="font-mono tabular-nums text-slate-100 font-semibold text-sm"
+                    className="font-mono tabular-nums text-white font-semibold text-sm"
                     data-testid="project-price"
                   >
                     {formatPrice(project.price, project.currency)}
@@ -210,11 +199,10 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
             </h1>
           </div>
 
-          {/* Status Indicator & Action Buttons */}
+          {/* Status Indicator (Monochrome: dotted, solid, or inverted white) & Action Buttons */}
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 shrink-0">
-            {/* Color-coded status tag required by brief */}
             <div
-              className={`inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-xl border text-xs font-semibold ${statusVisual.bgColor} ${statusVisual.borderColor} ${statusVisual.textColor}`}
+              className={`inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-xl text-xs ${statusVisual.badgeClass}`}
               data-testid="project-status-badge"
             >
               {project.status === 'Aprobado' && (
@@ -230,29 +218,23 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
             </div>
 
             <div className="grid grid-cols-2 sm:flex items-center gap-2.5">
+              {/* Primary action: White background with black text */}
               <button
                 type="button"
                 disabled={isUpdatingStatus}
                 onClick={() => handleStatusChange('Aprobado')}
-                className={`min-h-[44px] px-4 py-2.5 rounded-xl text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-2 transition-all whitespace-nowrap shrink-0 cursor-pointer ${
-                  project.status === 'Aprobado'
-                    ? 'bg-emerald-500 text-slate-950 shadow-lg shadow-emerald-500/20'
-                    : 'bg-emerald-600/90 hover:bg-emerald-500 text-white'
-                }`}
+                className="min-h-[44px] px-4 py-2.5 rounded-xl text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-2 transition-all whitespace-nowrap shrink-0 cursor-pointer bg-white text-black hover:bg-neutral-200"
               >
                 <CheckCircle2 className="w-4 h-4 shrink-0" />
                 <span>Aprobar</span>
               </button>
 
+              {/* Secondary action: Transparent with white border */}
               <button
                 type="button"
                 disabled={isUpdatingStatus}
                 onClick={() => handleStatusChange('Cambios solicitados')}
-                className={`min-h-[44px] px-4 py-2.5 rounded-xl text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-2 transition-all whitespace-nowrap shrink-0 cursor-pointer ${
-                  project.status === 'Cambios solicitados'
-                    ? 'bg-rose-500 text-white shadow-lg shadow-rose-500/20'
-                    : 'bg-slate-800 hover:bg-rose-950/80 text-slate-200 hover:text-rose-200 border border-slate-700 hover:border-rose-500/40'
-                }`}
+                className="min-h-[44px] px-4 py-2.5 rounded-xl text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-2 transition-all whitespace-nowrap shrink-0 cursor-pointer bg-transparent text-white border border-white hover:bg-white/10"
               >
                 <AlertCircle className="w-4 h-4 shrink-0" />
                 <span>Solicitar cambios</span>
@@ -262,19 +244,19 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
         </div>
 
         {statusFeedback && (
-          <div className="mt-4 pt-3 border-t border-slate-800/80 flex items-center justify-between text-xs text-emerald-300">
+          <div className="mt-4 pt-3 border-t border-[#2A2A2A] flex items-center justify-between text-xs text-neutral-300">
             <span>{statusFeedback}</span>
           </div>
         )}
 
         {/* WhatsApp CTA when status is Approved */}
         {project.status === 'Aprobado' && (
-          <div className="mt-4 pt-4 border-t border-emerald-500/20 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-emerald-950/30 -mx-4 sm:-mx-6 -mb-4 sm:-mb-6 p-4 sm:px-6 rounded-b-2xl">
+          <div className="mt-4 pt-4 border-t border-[#2A2A2A] flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-[#0A0A0A] -mx-4 sm:-mx-6 -mb-4 sm:-mb-6 p-4 sm:px-6 rounded-b-2xl">
             <div className="space-y-0.5">
-              <p className="text-sm font-semibold text-emerald-200">
+              <p className="text-sm font-semibold text-white">
                 Proyecto aprobado para entrega final
               </p>
-              <p className="text-xs text-emerald-300/80">
+              <p className="text-xs text-neutral-400">
                 Coordina el pago o la descarga del archivo original sin marca de agua por WhatsApp.
               </p>
             </div>
@@ -283,7 +265,7 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
               target="_blank"
               rel="noopener noreferrer"
               data-testid="whatsapp-contact-btn"
-              className="min-h-[44px] px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-sm inline-flex items-center justify-center gap-2 transition-colors whitespace-nowrap shrink-0 shadow-lg shadow-emerald-500/10"
+              className="min-h-[44px] px-5 py-2.5 rounded-xl bg-white hover:bg-neutral-200 text-black font-semibold text-sm inline-flex items-center justify-center gap-2 transition-colors whitespace-nowrap shrink-0"
             >
               <MessageCircle className="w-4 h-4 fill-current" />
               <span>Contactar para el pago / entrega</span>
@@ -295,7 +277,7 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
       {/* Main 2-Column Layout: Video Left/Center (7 cols) + Time-coded Comments Right/Bottom (5 cols) */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         {/* Left/Top Column: Centered Vertical Video Player */}
-        <div className="lg:col-span-7 bg-slate-900/60 border border-slate-800/90 rounded-2xl p-4 sm:p-6 flex flex-col items-center">
+        <div className="lg:col-span-7 bg-[#111111] border border-[#2A2A2A] rounded-2xl p-4 sm:p-6 flex flex-col items-center">
           <VideoPlayer
             ref={playerRef}
             videoUrl={project.videoUrl}
@@ -305,17 +287,17 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
             onTimeUpdate={(sec) => setLiveSecond(sec)}
           />
 
-          {/* Primary Quick-Action underneath the player for mobile & desktop thumb reach */}
+          {/* Primary Quick-Action underneath the player */}
           <div className="w-full max-w-[380px] mt-4">
             <button
               type="button"
               data-testid="capture-moment-btn"
               onClick={handleCaptureMoment}
-              className="w-full min-h-[48px] px-4 py-3 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold text-sm inline-flex items-center justify-center gap-2.5 shadow-lg shadow-sky-500/15 transition-all cursor-pointer active:scale-[0.99]"
+              className="w-full min-h-[48px] px-4 py-3 rounded-xl bg-white hover:bg-neutral-200 text-black font-semibold text-sm inline-flex items-center justify-center gap-2.5 transition-all cursor-pointer active:scale-[0.99]"
             >
               <MessageSquarePlus className="w-5 h-5 shrink-0" />
               <span>Comentar en este momento</span>
-              <span className="font-mono tabular-nums bg-slate-950/20 px-2 py-0.5 rounded-md text-xs font-bold">
+              <span className="font-mono tabular-nums bg-black/15 px-2 py-0.5 rounded-md text-xs font-bold">
                 {formatVideoTimestamp(liveSecond)}
               </span>
             </button>
@@ -323,17 +305,17 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
         </div>
 
         {/* Right/Bottom Column: Comments Panel */}
-        <aside className="lg:col-span-5 bg-slate-900/90 border border-slate-800 rounded-2xl p-4 sm:p-6 flex flex-col">
-          <div className="flex items-center justify-between gap-2 pb-4 border-b border-slate-800">
+        <aside className="lg:col-span-5 bg-[#111111] border border-[#2A2A2A] rounded-2xl p-4 sm:p-6 flex flex-col">
+          <div className="flex items-center justify-between gap-2 pb-4 border-b border-[#2A2A2A]">
             <div>
               <h2 className="text-base font-semibold text-white">
                 Comentarios en el video
               </h2>
-              <p className="text-xs text-slate-400 mt-0.5">
+              <p className="text-xs text-neutral-400 mt-0.5">
                 Toca cualquier comentario para saltar a ese segundo exacto
               </p>
             </div>
-            <span className="font-mono tabular-nums text-xs text-slate-400">
+            <span className="font-mono tabular-nums text-xs text-neutral-400">
               {sortedComments.length}{' '}
               {sortedComments.length === 1 ? 'nota' : 'notas'}
             </span>
@@ -344,24 +326,24 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
             <button
               type="button"
               onClick={handleCaptureMoment}
-              className="mt-4 w-full min-h-[44px] px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-750 border border-slate-700 text-slate-100 text-xs sm:text-sm font-medium inline-flex items-center justify-between gap-2 transition-colors cursor-pointer"
+              className="mt-4 w-full min-h-[44px] px-4 py-2.5 rounded-xl bg-transparent hover:bg-white/10 border border-white text-white text-xs sm:text-sm font-medium inline-flex items-center justify-between gap-2 transition-colors cursor-pointer"
             >
               <span className="inline-flex items-center gap-2">
-                <MessageSquarePlus className="w-4 h-4 text-sky-400" />
+                <MessageSquarePlus className="w-4 h-4 text-white" />
                 <span>Agregar nota en el segundo actual</span>
               </span>
-              <span className="font-mono tabular-nums text-sky-300 font-semibold">
+              <span className="font-mono tabular-nums text-white font-semibold">
                 {formatVideoTimestamp(liveSecond)}
               </span>
             </button>
           ) : (
             <form
               onSubmit={handleCommentSubmit}
-              className="mt-4 bg-slate-950/90 border border-sky-500/40 rounded-xl p-4 space-y-3"
+              className="mt-4 bg-[#0A0A0A] border border-white rounded-xl p-4 space-y-3"
               data-testid="comment-composer-form"
             >
               <div className="flex items-center justify-between gap-2">
-                <span className="text-xs font-semibold text-sky-300">
+                <span className="text-xs font-semibold text-white">
                   Nuevo comentario en segundo exacto
                 </span>
                 <div className="flex items-center gap-1.5">
@@ -373,18 +355,17 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
                     type="text"
                     value={customTimeInput}
                     onChange={(e) => setCustomTimeInput(e.target.value)}
-                    className="w-20 px-2 py-1 rounded-lg bg-slate-900 border border-slate-700 font-mono tabular-nums text-xs text-center text-sky-300 focus:outline-none focus:border-sky-400"
+                    className="w-20 px-2 py-1 rounded-lg bg-[#111111] border border-[#2A2A2A] font-mono tabular-nums text-xs text-center text-white focus:outline-none focus:border-white"
                     placeholder="00:19"
                   />
                 </div>
               </div>
 
-              {/* Ask for client name the first time, or show remembered name with edit link */}
               {!savedClientName || isEditingName ? (
                 <div>
                   <label
                     htmlFor="client-author-name"
-                    className="block text-xs font-medium text-slate-300 mb-1"
+                    className="block text-xs font-medium text-neutral-300 mb-1"
                   >
                     Tu nombre
                   </label>
@@ -396,15 +377,15 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
                     value={authorNameInput}
                     onChange={(e) => setAuthorNameInput(e.target.value)}
                     placeholder="Ej. Valeria Mendoza"
-                    className="w-full min-h-[40px] px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-sky-400"
+                    className="w-full min-h-[40px] px-3 py-2 rounded-lg bg-[#111111] border border-[#2A2A2A] text-sm text-white placeholder-neutral-500 focus:outline-none focus:border-white"
                   />
                 </div>
               ) : (
-                <div className="flex items-center justify-between text-xs text-slate-400 bg-slate-900/70 px-3 py-2 rounded-lg">
+                <div className="flex items-center justify-between text-xs text-neutral-400 bg-[#111111] border border-[#2A2A2A] px-3 py-2 rounded-lg">
                   <span className="inline-flex items-center gap-1.5">
-                    <User className="w-3.5 h-3.5 text-slate-400" />
+                    <User className="w-3.5 h-3.5 text-neutral-400" />
                     <span>
-                      Comentando como <strong className="text-slate-200">{savedClientName}</strong>
+                      Comentando como <strong className="text-white">{savedClientName}</strong>
                     </span>
                   </span>
                   <button
@@ -413,7 +394,7 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
                       setAuthorNameInput(savedClientName);
                       setIsEditingName(true);
                     }}
-                    className="text-sky-400 hover:underline font-medium"
+                    className="text-white underline font-medium cursor-pointer"
                   >
                     Cambiar nombre
                   </button>
@@ -423,7 +404,7 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
               <div>
                 <label
                   htmlFor="client-comment-text"
-                  className="block text-xs font-medium text-slate-300 mb-1"
+                  className="block text-xs font-medium text-neutral-300 mb-1"
                 >
                   ¿Qué cambio o detalle necesitas en este momento?
                 </label>
@@ -434,13 +415,13 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
                   maxLength={1000}
                   value={commentText}
                   onChange={(e) => setCommentText(e.target.value)}
-                  placeholder="Ej. Cambiar este texto por la oferta del 2x1..."
-                  className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-sky-400 resize-none"
+                  placeholder="Ej. Cambiar este texto por la oferta..."
+                  className="w-full px-3 py-2 rounded-lg bg-[#111111] border border-[#2A2A2A] text-sm text-white placeholder-neutral-500 focus:outline-none focus:border-white resize-none"
                 />
               </div>
 
               {formError && (
-                <p className="text-xs text-rose-400" role="alert">
+                <p className="text-xs text-white bg-[#111111] border border-white rounded-lg p-2.5" role="alert">
                   {formError}
                 </p>
               )}
@@ -452,14 +433,14 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
                     setIsComposerOpen(false);
                     setFormError(null);
                   }}
-                  className="min-h-[40px] px-3 py-1.5 rounded-lg text-xs font-medium text-slate-400 hover:text-slate-200 hover:bg-slate-900 transition-colors"
+                  className="min-h-[40px] px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-transparent border border-white hover:bg-white/10 transition-colors cursor-pointer"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
                   disabled={isSubmittingComment}
-                  className="min-h-[40px] px-4 py-1.5 rounded-lg bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold text-xs inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+                  className="min-h-[40px] px-4 py-1.5 rounded-lg bg-white hover:bg-neutral-200 text-black font-semibold text-xs inline-flex items-center gap-1.5 transition-colors cursor-pointer"
                 >
                   <Send className="w-3.5 h-3.5" />
                   <span>
@@ -470,14 +451,20 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
             </form>
           )}
 
+          {formError && !isComposerOpen && (
+            <div className="mt-3 p-3 rounded-xl bg-[#0A0A0A] border border-white text-xs text-white" role="alert">
+              {formError}
+            </div>
+          )}
+
           {/* Time-ordered list of comments */}
-          <div className="mt-4 divide-y divide-slate-800/80 max-h-[520px] overflow-y-auto pr-1">
+          <div className="mt-4 divide-y divide-[#2A2A2A] max-h-[520px] overflow-y-auto pr-1">
             {sortedComments.length === 0 ? (
               <div className="py-10 text-center space-y-2">
-                <p className="text-sm font-medium text-slate-300">
+                <p className="text-sm font-medium text-neutral-300">
                   Aún no hay comentarios en este video
                 </p>
-                <p className="text-xs text-slate-500 max-w-xs mx-auto">
+                <p className="text-xs text-neutral-500 max-w-xs mx-auto">
                   Reproduce el video y presiona &ldquo;Comentar en este momento&rdquo; para dejar una nota en el segundo exacto.
                 </p>
               </div>
@@ -489,16 +476,16 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
                   onClick={() => handleSeekToComment(comment.videoSecond)}
                   className={`w-full text-left py-3.5 px-3 first:mt-0 rounded-xl transition-colors flex items-start gap-3 group cursor-pointer ${
                     comment.resolved
-                      ? 'opacity-60 hover:opacity-80 bg-transparent'
-                      : 'hover:bg-slate-800/60'
+                      ? 'opacity-50 hover:opacity-75 bg-transparent'
+                      : 'hover:bg-white/5'
                   }`}
                 >
                   {/* Timestamp Trigger */}
                   <span
                     className={`mt-0.5 inline-flex items-center gap-1 px-2.5 py-1 rounded-lg font-mono tabular-nums text-xs font-semibold shrink-0 transition-colors ${
                       comment.resolved
-                        ? 'bg-slate-800/70 text-slate-500 line-through'
-                        : 'bg-sky-500/15 text-sky-300 group-hover:bg-sky-500 group-hover:text-slate-950'
+                        ? 'bg-[#0A0A0A] border border-[#2A2A2A] text-neutral-500 line-through'
+                        : 'bg-white text-black group-hover:bg-neutral-200'
                     }`}
                   >
                     <Play className="w-3 h-3 fill-current" />
@@ -509,13 +496,13 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
                     <div className="flex items-center justify-between gap-2 text-xs">
                       <span
                         className={`font-semibold truncate ${
-                          comment.resolved ? 'text-slate-500' : 'text-slate-200'
+                          comment.resolved ? 'text-neutral-500' : 'text-white'
                         }`}
                       >
                         {comment.authorName}
                       </span>
                       {comment.resolved && (
-                        <span className="inline-flex items-center gap-1 text-xs text-emerald-400/80 shrink-0">
+                        <span className="inline-flex items-center gap-1 text-xs text-neutral-400 shrink-0">
                           <Check className="w-3 h-3" />
                           <span>Resuelto</span>
                         </span>
@@ -525,8 +512,8 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
                     <p
                       className={`text-sm leading-relaxed break-words ${
                         comment.resolved
-                          ? 'line-through text-slate-500'
-                          : 'text-slate-300'
+                          ? 'line-through text-neutral-500'
+                          : 'text-neutral-200'
                       }`}
                     >
                       {comment.text}

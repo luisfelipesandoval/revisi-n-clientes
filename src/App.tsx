@@ -23,6 +23,7 @@ import {
   db,
   googleProvider,
   handleFirestoreError,
+  formatReadableFirestoreError,
   OperationType,
 } from './firebase';
 import {
@@ -69,6 +70,9 @@ export function AppContent() {
     string | null
   >(null);
   const [adminComments, setAdminComments] = useState<VideoComment[]>([]);
+  const [adminFirestoreError, setAdminFirestoreError] = useState<string | null>(
+    null
+  );
 
   // Client Page State (only used when route.view === 'client')
   const [clientProject, setClientProject] = useState<Project | null>(null);
@@ -76,6 +80,9 @@ export function AppContent() {
   const [loadingClientProject, setLoadingClientProject] =
     useState<boolean>(true);
   const [clientLinkInvalid, setClientLinkInvalid] = useState<boolean>(false);
+  const [clientFirestoreError, setClientFirestoreError] = useState<
+    string | null
+  >(null);
 
   // 1) ADMIN ZONE AUTH & DATA ("/")
   useEffect(() => {
@@ -110,9 +117,11 @@ export function AppContent() {
       return;
     }
 
+    setAdminFirestoreError(null);
     const unsub = onSnapshot(
       collection(db, 'projects'),
       (snap) => {
+        setAdminFirestoreError(null);
         const list: Project[] = snap.docs.map((d) => {
           const data = d.data();
           return {
@@ -143,7 +152,11 @@ export function AppContent() {
         );
       },
       (error) => {
-        handleFirestoreError(error, OperationType.LIST, 'projects');
+        try {
+          handleFirestoreError(error, OperationType.LIST, 'projects');
+        } catch (formattedErr) {
+          setAdminFirestoreError(formatReadableFirestoreError(formattedErr));
+        }
       }
     );
 
@@ -179,11 +192,15 @@ export function AppContent() {
         setAdminComments(list);
       },
       (error) => {
-        handleFirestoreError(
-          error,
-          OperationType.LIST,
-          `comments?projectId=${selectedAdminProjectId}`
-        );
+        try {
+          handleFirestoreError(
+            error,
+            OperationType.LIST,
+            `comments?projectId=${selectedAdminProjectId}`
+          );
+        } catch (formattedErr) {
+          setAdminFirestoreError(formatReadableFirestoreError(formattedErr));
+        }
       }
     );
 
@@ -197,6 +214,7 @@ export function AppContent() {
 
     setLoadingClientProject(true);
     setClientLinkInvalid(false);
+    setClientFirestoreError(null);
 
     const projectPath = `projects/${projectId}`;
     const unsubProject = onSnapshot(
@@ -229,10 +247,13 @@ export function AppContent() {
         });
         setClientLinkInvalid(false);
       },
-      () => {
+      (error) => {
         setLoadingClientProject(false);
-        setClientProject(null);
-        setClientLinkInvalid(true);
+        try {
+          handleFirestoreError(error, OperationType.GET, projectPath);
+        } catch (formattedErr) {
+          setClientFirestoreError(formatReadableFirestoreError(formattedErr));
+        }
       }
     );
 
@@ -258,11 +279,15 @@ export function AppContent() {
         setClientComments(list);
       },
       (error) => {
-        handleFirestoreError(
-          error,
-          OperationType.LIST,
-          `comments?projectId=${projectId}`
-        );
+        try {
+          handleFirestoreError(
+            error,
+            OperationType.LIST,
+            `comments?projectId=${projectId}`
+          );
+        } catch (formattedErr) {
+          setClientFirestoreError(formatReadableFirestoreError(formattedErr));
+        }
       }
     );
 
@@ -272,7 +297,7 @@ export function AppContent() {
     };
   }, [route]);
 
-  // Client Actions
+  // Client Actions (Firestore Only)
   const handleClientUpdateStatus = async (newStatus: ProjectStatus) => {
     if (route.view !== 'client') return;
     const path = `projects/${route.projectId}`;
@@ -314,7 +339,7 @@ export function AppContent() {
     }
   };
 
-  // Admin Actions
+  // Admin Actions (Firestore Only)
   const handleSignInGoogle = async () => {
     setUnauthorizedDenied(false);
     const cred = await signInWithPopup(auth, googleProvider);
@@ -328,27 +353,57 @@ export function AppContent() {
     await signOut(auth);
   };
 
+  const ensureActiveAdminSession = () => {
+    const activeUser = auth.currentUser;
+    if (!activeUser || !isAuthorizedAdminUser(activeUser)) {
+      throw new Error(
+        'La sesión de Google no está activa o no corresponde al correo de administrador autorizado.'
+      );
+    }
+  };
+
   const handleAdminCreateProject = async (
     input: ProjectFormInput
   ): Promise<string> => {
+    ensureActiveAdminSession();
+    setAdminFirestoreError(null);
+
     // Cryptographically random code of 28 characters (>= 20 chars requirement)
     const newId = generateSecureProjectId(28);
     const path = `projects/${newId}`;
+
+    const sanitized = {
+      title: input.title.trim().slice(0, 120),
+      clientName: input.clientName.trim().slice(0, 100),
+      videoUrl: input.videoUrl.trim().slice(0, 500),
+      price: Math.max(0, Number(input.price) || 0),
+      currency: input.currency,
+      showPrice: Boolean(input.showPrice),
+      watermarkEnabled: Boolean(input.watermarkEnabled),
+      watermarkText: input.watermarkText.trim().slice(0, 100),
+      status: input.status,
+      whatsappNumber: input.whatsappNumber.trim().slice(0, 30),
+    };
+
     try {
       await setDoc(doc(db, 'projects', newId), {
-        title: input.title.trim().slice(0, 120),
-        clientName: input.clientName.trim().slice(0, 100),
-        videoUrl: input.videoUrl.trim().slice(0, 500),
-        price: Math.max(0, Number(input.price) || 0),
-        currency: input.currency,
-        showPrice: Boolean(input.showPrice),
-        watermarkEnabled: Boolean(input.watermarkEnabled),
-        watermarkText: input.watermarkText.trim().slice(0, 100),
-        status: input.status,
-        whatsappNumber: input.whatsappNumber.trim().slice(0, 30),
+        ...sanitized,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
+
+      const now = new Date();
+      const createdProject: Project = {
+        id: newId,
+        ...sanitized,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      // Ensure immediate appearance in the admin list while onSnapshot syncs
+      setAdminProjects((prev) =>
+        prev.some((p) => p.id === newId) ? prev : [createdProject, ...prev]
+      );
       setSelectedAdminProjectId(newId);
       return newId;
     } catch (error) {
@@ -360,19 +415,26 @@ export function AppContent() {
     projectId: string,
     input: ProjectFormInput
   ) => {
+    ensureActiveAdminSession();
+    setAdminFirestoreError(null);
+
     const path = `projects/${projectId}`;
+    const sanitized = {
+      title: input.title.trim().slice(0, 120),
+      clientName: input.clientName.trim().slice(0, 100),
+      videoUrl: input.videoUrl.trim().slice(0, 500),
+      price: Math.max(0, Number(input.price) || 0),
+      currency: input.currency,
+      showPrice: Boolean(input.showPrice),
+      watermarkEnabled: Boolean(input.watermarkEnabled),
+      watermarkText: input.watermarkText.trim().slice(0, 100),
+      status: input.status,
+      whatsappNumber: input.whatsappNumber.trim().slice(0, 30),
+    };
+
     try {
       await updateDoc(doc(db, 'projects', projectId), {
-        title: input.title.trim().slice(0, 120),
-        clientName: input.clientName.trim().slice(0, 100),
-        videoUrl: input.videoUrl.trim().slice(0, 500),
-        price: Math.max(0, Number(input.price) || 0),
-        currency: input.currency,
-        showPrice: Boolean(input.showPrice),
-        watermarkEnabled: Boolean(input.watermarkEnabled),
-        watermarkText: input.watermarkText.trim().slice(0, 100),
-        status: input.status,
-        whatsappNumber: input.whatsappNumber.trim().slice(0, 30),
+        ...sanitized,
         updatedAt: serverTimestamp(),
       });
     } catch (error) {
@@ -381,6 +443,9 @@ export function AppContent() {
   };
 
   const handleAdminDeleteProject = async (projectId: string) => {
+    ensureActiveAdminSession();
+    setAdminFirestoreError(null);
+
     const path = `projects/${projectId}`;
     try {
       const q = query(
@@ -403,6 +468,9 @@ export function AppContent() {
     commentId: string,
     currentResolved: boolean
   ) => {
+    ensureActiveAdminSession();
+    setAdminFirestoreError(null);
+
     const path = `comments/${commentId}`;
     try {
       await updateDoc(doc(db, 'comments', commentId), {
@@ -416,33 +484,63 @@ export function AppContent() {
   // RENDER 1: Invalid Link or non-existent project on /ver/ID_DEL_PROYECTO -> Simple "Enlace no válido"
   if (
     route.view === 'invalid-client-link' ||
-    (route.view === 'client' && !loadingClientProject && (clientLinkInvalid || !clientProject))
+    (route.view === 'client' &&
+      !loadingClientProject &&
+      !clientFirestoreError &&
+      (clientLinkInvalid || !clientProject))
   ) {
     return (
-      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-6">
-        <p className="text-base font-medium text-slate-300" data-testid="invalid-link-message">
+      <div className="min-h-screen bg-[#000000] text-white flex items-center justify-center p-6">
+        <p
+          className="text-base font-medium text-neutral-300"
+          data-testid="invalid-link-message"
+        >
           Enlace no válido
         </p>
       </div>
     );
   }
 
-  // RENDER 2: Independent Client Page (/ver/ID_DEL_PROYECTO) — Zero navigation bar, zero admin links, zero login or copy buttons
+  // RENDER 2: Independent Client Page (/ver/ID_DEL_PROYECTO)
   if (route.view === 'client') {
-    if (loadingClientProject || !clientProject) {
+    if (loadingClientProject) {
       return (
-        <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-6">
-          <p className="text-sm text-slate-400">Cargando...</p>
+        <div className="min-h-screen bg-[#000000] text-white flex items-center justify-center p-6">
+          <p className="text-sm text-neutral-400">Cargando...</p>
+        </div>
+      );
+    }
+
+    if (clientFirestoreError && !clientProject) {
+      return (
+        <div className="min-h-screen bg-[#000000] text-white flex items-center justify-center p-6">
+          <div className="max-w-md w-full bg-[#111111] border border-white rounded-2xl p-6 text-xs text-white">
+            {clientFirestoreError}
+          </div>
+        </div>
+      );
+    }
+
+    if (!clientProject) {
+      return (
+        <div className="min-h-screen bg-[#000000] text-white flex items-center justify-center p-6">
+          <p
+            className="text-base font-medium text-neutral-300"
+            data-testid="invalid-link-message"
+          >
+            Enlace no válido
+          </p>
         </div>
       );
     }
 
     return (
-      <div className="min-h-screen bg-slate-950 text-slate-100">
+      <div className="min-h-screen bg-[#000000] text-white">
         <main>
           <ClientReviewView
             project={clientProject}
             comments={clientComments}
+            firestoreError={clientFirestoreError}
             onUpdateStatus={handleClientUpdateStatus}
             onAddComment={handleClientAddComment}
           />
@@ -453,12 +551,13 @@ export function AppContent() {
 
   // RENDER 3: Admin Zone ("/")
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100">
+    <div className="min-h-screen bg-[#000000] text-white">
       <main>
         <AdminDashboardView
           currentUser={currentUser}
           authReady={authReady}
           unauthorizedDenied={unauthorizedDenied}
+          firestoreError={adminFirestoreError}
           onSignInGoogle={handleSignInGoogle}
           onSignOut={handleSignOut}
           projects={adminProjects}

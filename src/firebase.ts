@@ -65,6 +65,19 @@ export function handleFirestoreError(
   throw new Error(JSON.stringify(errInfo));
 }
 
+export function formatReadableFirestoreError(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  try {
+    const parsed = JSON.parse(raw) as Partial<FirestoreErrorInfo>;
+    if (parsed && typeof parsed.error === 'string') {
+      return `Error en Firestore (${parsed.operationType || 'operación'} en ${parsed.path || 'base de datos'}): ${parsed.error}`;
+    }
+  } catch {
+    // Not a JSON string
+  }
+  return raw || 'Error inesperado al comunicarse con Firestore.';
+}
+
 async function testConnection() {
   try {
     await getDocFromServer(doc(db, 'test', 'connection'));

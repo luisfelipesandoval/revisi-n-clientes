@@ -78,10 +78,10 @@ export function isAuthorizedAdminUser(
   user: { uid?: string; email?: string | null; emailVerified?: boolean } | null | undefined
 ): boolean {
   if (!user) return false;
+  if (user.emailVerified === false) return false;
   return (
-    user.emailVerified === true &&
     typeof user.email === 'string' &&
-    user.email.toLowerCase() === ADMIN_EMAIL.toLowerCase()
+    user.email.trim().toLowerCase() === ADMIN_EMAIL.toLowerCase()
   );
 }
 

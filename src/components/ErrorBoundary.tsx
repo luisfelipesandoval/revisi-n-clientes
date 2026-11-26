@@ -1,5 +1,6 @@
 import React, { Component, ErrorInfo, ReactNode } from 'react';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
+import { formatReadableFirestoreError } from '../firebase';
 
 interface Props {
   children: ReactNode;
@@ -17,16 +18,10 @@ export class ErrorBoundary extends Component<Props, State> {
   };
 
   public static getDerivedStateFromError(error: Error): State {
-    let readable = error.message || 'Ha ocurrido un error inesperado.';
-    try {
-      const parsed = JSON.parse(error.message);
-      if (parsed && parsed.error) {
-        readable = `Error de permisos o datos en Firestore (${parsed.operationType} en ${parsed.path || 'ruta'}): ${parsed.error}`;
-      }
-    } catch {
-      // Plain error message
-    }
-    return { hasError: true, errorMessage: readable };
+    return {
+      hasError: true,
+      errorMessage: formatReadableFirestoreError(error),
+    };
   }
 
   public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
@@ -40,19 +35,19 @@ export class ErrorBoundary extends Component<Props, State> {
   public render() {
     if (this.state.hasError) {
       return (
-        <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-6">
-          <div className="max-w-md w-full bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4">
-            <div className="flex items-center gap-3 text-rose-400">
+        <div className="min-h-screen bg-[#000000] text-white flex items-center justify-center p-6">
+          <div className="max-w-md w-full bg-[#111111] border border-[#2A2A2A] rounded-2xl p-6 space-y-4">
+            <div className="flex items-center gap-3 text-white">
               <AlertTriangle className="w-6 h-6 shrink-0" />
               <h2 className="text-lg font-semibold">No se pudo completar la operación</h2>
             </div>
-            <p className="text-sm text-slate-300 leading-relaxed break-words">
+            <p className="text-sm text-neutral-300 leading-relaxed break-words">
               {this.state.errorMessage}
             </p>
             <button
               type="button"
               onClick={this.handleReset}
-              className="w-full min-h-[44px] inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-slate-100 text-slate-950 font-medium text-sm hover:bg-white transition-colors"
+              className="w-full min-h-[44px] inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-white text-black font-semibold text-sm hover:bg-neutral-200 transition-colors cursor-pointer"
             >
               <RefreshCw className="w-4 h-4" />
               <span>Intentar nuevamente</span>

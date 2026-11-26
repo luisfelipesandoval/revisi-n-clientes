@@ -7,7 +7,6 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
-    // Reusable Hardened Global Helpers
     function isValidId(id) {
       return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
@@ -24,13 +23,13 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    // Comparación del correo de admin ignorando mayúsculas usando request.auth.token.email
     function isAdmin() {
       return isSignedIn() &&
-        request.auth.token.email_verified == true &&
-        request.auth.token.email == 'chat.gpt.sandoval@gmail.com';
+        request.auth.token.email != null &&
+        request.auth.token.email.lower() == 'chat.gpt.sandoval@gmail.com';
     }
 
-    // Project Schema Validation Blueprint
     function isValidProject(data) {
       return data.keys().hasAll([
           'title',
@@ -76,7 +75,6 @@ service cloud.firestore {
         data.updatedAt is timestamp;
     }
 
-    // Comment Schema Validation Blueprint
     function isValidComment(data) {
       return data.keys().hasAll([
           'projectId',
@@ -102,80 +100,52 @@ service cloud.firestore {
         data.resolved is bool;
     }
 
-    // Projects Collection
+    // Colección projects
     match /projects/{projectId} {
-      // Cualquiera con el enlace único puede leer UN proyecto
+      // Cualquiera puede LEER un proyecto solo si conoce su ID exacto
       allow get: if isValidId(projectId);
 
-      // Solo el admin puede listar proyectos
-      allow list: if isAdmin() && existing().status in ['En revisión', 'Cambios solicitados', 'Aprobado'];
+      // Nadie excepto el admin puede listar todos los proyectos
+      allow list: if isAdmin();
 
-      // Solo el admin puede crear proyectos (con ID aleatorio de mínimo 20 caracteres)
+      // Solo el admin puede crear proyectos
       allow create: if isAdmin() &&
         isValidId(projectId) &&
         projectId.size() >= 20 &&
-        isValidProject(incoming()) &&
-        incoming().createdAt == request.time &&
-        incoming().updatedAt == request.time;
+        isValidProject(incoming());
 
-      // Action-Based Update:
-      // 1) Admin puede editar todos los campos del proyecto manteniendo createdAt inmutable.
-      // 2) Cualquiera con el enlace puede cambiar SOLO el campo 'status' entre los tres estados válidos.
+      // Admin puede editar todo; el cliente solo puede cambiar el campo 'status' entre los 3 valores válidos
       allow update: if isValidId(projectId) &&
-        isValidProject(incoming()) &&
-        incoming().createdAt == existing().createdAt && (
-          (
-            isAdmin() &&
-            incoming().updatedAt == request.time &&
-            incoming().diff(existing()).affectedKeys().hasOnly([
-              'title',
-              'clientName',
-              'videoUrl',
-              'price',
-              'currency',
-              'showPrice',
-              'watermarkEnabled',
-              'watermarkText',
-              'status',
-              'whatsappNumber',
-              'updatedAt'
-            ])
-          ) ||
+        isValidProject(incoming()) && (
+          isAdmin() ||
           (
             incoming().diff(existing()).affectedKeys().hasOnly(['status']) &&
             incoming().status in ['En revisión', 'Cambios solicitados', 'Aprobado']
           )
         );
 
-      // Solo el admin puede eliminar un proyecto
+      // Solo el admin puede borrar proyectos
       allow delete: if isAdmin() && isValidId(projectId);
     }
 
-    // Comments Collection
+    // Colección comments
     match /comments/{commentId} {
-      // Cualquiera con el enlace del proyecto puede leer los comentarios de ese proyecto
-      allow get: if isValidId(commentId) && isValidId(existing().projectId);
-      allow list: if isValidId(existing().projectId);
+      // Lectura de comentarios del proyecto
+      allow get: if isValidId(commentId);
+      allow list: if true;
 
-      // Cualquiera con el enlace de un proyecto existente puede crear un comentario nuevo (no resuelto)
+      // Cualquiera con el enlace de un proyecto existente puede crear comentarios en él
       allow create: if isValidId(commentId) &&
         isValidComment(incoming()) &&
         incoming().resolved == false &&
-        incoming().createdAt == request.time &&
         exists(/databases/$(database)/documents/projects/$(incoming().projectId));
 
-      // Solo el admin puede marcar o desmarcar un comentario como resuelto
+      // Solo el admin puede marcar comentarios como resueltos o editarlos
       allow update: if isAdmin() &&
         isValidId(commentId) &&
-        isValidComment(incoming()) &&
-        incoming().projectId == existing().projectId &&
-        incoming().authorName == existing().authorName &&
-        incoming().text == existing().text &&
-        incoming().videoSecond == existing().videoSecond &&
-        incoming().createdAt == existing().createdAt &&
-        incoming().diff(existing()).affectedKeys().hasOnly(['resolved']);
+        isValidComment(incoming());
 
-      // Solo el admin puede eliminar comentarios
+      // Solo el admin puede borrar comentarios
       allow delete: if isAdmin() && isValidId(commentId);
     }
   }

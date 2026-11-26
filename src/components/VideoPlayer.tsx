@@ -281,11 +281,11 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
         >
           {parsedSource.type === 'invalid' ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center bg-black">
-              <AlertCircle className="w-8 h-8 text-rose-400 mb-3" />
-              <p className="text-sm font-medium text-slate-200 mb-1">
+              <AlertCircle className="w-8 h-8 text-white mb-3" />
+              <p className="text-sm font-medium text-white mb-1">
                 Enlace de video .mp4 no válido
               </p>
-              <p className="text-xs text-slate-400">{parsedSource.reason}</p>
+              <p className="text-xs text-neutral-400">{parsedSource.reason}</p>
             </div>
           ) : (
             <video
@@ -388,7 +388,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
                 <div className="relative w-full h-1.5 group-hover:h-2 bg-white/25 rounded-full overflow-visible transition-all">
                   {/* Filled progress */}
                   <div
-                    className="absolute inset-y-0 left-0 bg-sky-400 rounded-full"
+                    className="absolute inset-y-0 left-0 bg-white rounded-full"
                     style={{ width: `${progressPercent}%` }}
                   />
 
@@ -404,7 +404,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
                         title={`Comentario en ${formatVideoTimestamp(sec)}`}
                         data-testid="comment-timeline-marker"
                         style={{ left: `${leftPct}%` }}
-                        className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-1.5 h-2.5 rounded-full bg-amber-300 ring-1 ring-black/80 pointer-events-none z-10"
+                        className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-1.5 h-2.5 rounded-full bg-white ring-1 ring-black pointer-events-none z-10"
                       />
                     );
                   })}
@@ -412,7 +412,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
                   {/* Scrubber thumb */}
                   <span
                     style={{ left: `${progressPercent}%` }}
-                    className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3.5 h-3.5 rounded-full bg-white shadow-md z-20 transition-transform group-hover:scale-110"
+                    className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3.5 h-3.5 rounded-full bg-white ring-1 ring-black shadow-md z-20 transition-transform group-hover:scale-110"
                   />
                 </div>
               </div>
@@ -434,7 +434,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
                   </button>
 
                   <span
-                    className="font-mono tabular-nums text-xs text-slate-200 select-none px-1"
+                    className="font-mono tabular-nums text-xs text-neutral-200 select-none px-1"
                     data-testid="video-time-display"
                   >
                     {formatVideoTimestamp(currentTime)} /{' '}
@@ -447,10 +447,10 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
                     type="button"
                     onClick={toggleMute}
                     aria-label={isMuted ? 'Activar sonido' : 'Silenciar video'}
-                    className="min-h-[40px] min-w-[40px] inline-flex items-center justify-center rounded-xl text-slate-200 hover:bg-white/15 transition-colors cursor-pointer"
+                    className="min-h-[40px] min-w-[40px] inline-flex items-center justify-center rounded-xl text-neutral-200 hover:bg-white/15 transition-colors cursor-pointer"
                   >
                     {isMuted ? (
-                      <VolumeX className="w-5 h-5 text-rose-400" />
+                      <VolumeX className="w-5 h-5 text-neutral-400" />
                     ) : (
                       <Volume2 className="w-5 h-5" />
                     )}
@@ -464,7 +464,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
                         ? 'Salir de pantalla completa'
                         : 'Pantalla completa'
                     }
-                    className="min-h-[40px] min-w-[40px] inline-flex items-center justify-center rounded-xl text-slate-200 hover:bg-white/15 transition-colors cursor-pointer"
+                    className="min-h-[40px] min-w-[40px] inline-flex items-center justify-center rounded-xl text-neutral-200 hover:bg-white/15 transition-colors cursor-pointer"
                   >
                     {isFullscreen ? (
                       <Minimize className="w-4 h-4" />

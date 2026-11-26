@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Plus,
   Copy,
@@ -14,6 +14,8 @@ import {
   Eye,
   EyeOff,
   ShieldAlert,
+  AlertCircle,
+  Clock,
 } from 'lucide-react';
 import { User as FirebaseUser } from 'firebase/auth';
 import {
@@ -35,11 +37,13 @@ import {
   VALID_CURRENCIES,
   isAuthorizedAdminUser,
 } from '../utils/validation';
+import { formatReadableFirestoreError } from '../firebase';
 
 interface AdminDashboardViewProps {
   currentUser: FirebaseUser | null;
   authReady: boolean;
   unauthorizedDenied: boolean;
+  firestoreError?: string | null;
   onSignInGoogle: () => Promise<void>;
   onSignOut: () => Promise<void>;
   projects: Project[];
@@ -69,6 +73,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   currentUser,
   authReady,
   unauthorizedDenied,
+  firestoreError,
   onSignInGoogle,
   onSignOut,
   projects,
@@ -93,28 +98,42 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
 
+  // Track which project ID was last loaded into the form so we don't wipe form/messages on re-renders
+  const loadedProjectIdRef = useRef<string | null>(null);
+
   useEffect(() => {
-    if (isCreatingNew || !selectedProject) {
-      setFormState(DEFAULT_FORM_INPUT);
-      setFormError(null);
-      setSaveSuccess(null);
+    if (isCreatingNew) {
+      if (loadedProjectIdRef.current !== '__new__') {
+        loadedProjectIdRef.current = '__new__';
+        setFormState(DEFAULT_FORM_INPUT);
+        setFormError(null);
+        setSaveSuccess(null);
+      }
       return;
     }
-    setFormState({
-      title: selectedProject.title,
-      clientName: selectedProject.clientName,
-      videoUrl: selectedProject.videoUrl,
-      price: selectedProject.price,
-      currency: selectedProject.currency,
-      showPrice: selectedProject.showPrice,
-      watermarkEnabled: selectedProject.watermarkEnabled,
-      watermarkText: selectedProject.watermarkText,
-      status: selectedProject.status,
-      whatsappNumber: selectedProject.whatsappNumber,
-    });
-    setFormError(null);
-    setConfirmDeleteId(null);
-  }, [selectedProject?.id, isCreatingNew]);
+
+    if (selectedProject) {
+      if (loadedProjectIdRef.current !== selectedProject.id) {
+        loadedProjectIdRef.current = selectedProject.id;
+        setFormState({
+          title: selectedProject.title,
+          clientName: selectedProject.clientName,
+          videoUrl: selectedProject.videoUrl,
+          price: selectedProject.price,
+          currency: selectedProject.currency,
+          showPrice: selectedProject.showPrice,
+          watermarkEnabled: selectedProject.watermarkEnabled,
+          watermarkText: selectedProject.watermarkText,
+          status: selectedProject.status,
+          whatsappNumber: selectedProject.whatsappNumber,
+        });
+        setConfirmDeleteId(null);
+      }
+    } else if (loadedProjectIdRef.current !== null) {
+      loadedProjectIdRef.current = null;
+      setFormState(DEFAULT_FORM_INPUT);
+    }
+  }, [selectedProject, isCreatingNew]);
 
   const getClientShareUrl = (projectId: string) => {
     return `${window.location.origin}/ver/${encodeURIComponent(projectId)}`;
@@ -135,6 +154,11 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
     e.preventDefault();
     setFormError(null);
     setSaveSuccess(null);
+
+    if (!currentUser || !isAuthorizedAdminUser(currentUser)) {
+      setFormError('Tu sesión de Google no está activa. Vuelve a iniciar sesión.');
+      return;
+    }
 
     const trimmedTitle = formState.title.trim();
     const trimmedClient = formState.clientName.trim();
@@ -177,18 +201,17 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
     try {
       if (isCreatingNew || !selectedProject) {
         const newId = await onCreateProject(cleanInput);
+        loadedProjectIdRef.current = newId;
         setIsCreatingNew(false);
         onSelectProject(newId);
-        setSaveSuccess('Proyecto creado correctamente.');
+        setSaveSuccess('Proyecto guardado en Firestore correctamente.');
       } else {
         await onUpdateProject(selectedProject.id, cleanInput);
-        setSaveSuccess('Cambios guardados correctamente.');
+        setSaveSuccess('Cambios guardados en Firestore correctamente.');
       }
-      window.setTimeout(() => setSaveSuccess(null), 3000);
+      window.setTimeout(() => setSaveSuccess(null), 4000);
     } catch (err) {
-      setFormError(
-        err instanceof Error ? err.message : 'No se pudo guardar el proyecto.'
-      );
+      setFormError(formatReadableFirestoreError(err));
     } finally {
       setIsSaving(false);
     }
@@ -200,34 +223,41 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
     try {
       await onDeleteProject(projectId);
       setConfirmDeleteId(null);
-      setSaveSuccess('Proyecto eliminado.');
+      setSaveSuccess('Proyecto eliminado de Firestore.');
     } catch (err) {
-      setFormError(
-        err instanceof Error ? err.message : 'No se pudo eliminar el proyecto.'
-      );
+      setFormError(formatReadableFirestoreError(err));
     } finally {
       setIsSaving(false);
     }
   };
 
+  const handleResolveClick = async (commentId: string, currentResolved: boolean) => {
+    setFormError(null);
+    try {
+      await onToggleCommentResolved(commentId, currentResolved);
+    } catch (err) {
+      setFormError(formatReadableFirestoreError(err));
+    }
+  };
+
   if (!authReady) {
     return (
-      <div className="min-h-screen flex items-center justify-center px-4">
-        <p className="text-sm text-slate-400">Cargando...</p>
+      <div className="min-h-screen bg-[#000000] text-white flex items-center justify-center px-4">
+        <p className="text-sm text-neutral-400">Cargando...</p>
       </div>
     );
   }
 
-  // Gate: If not logged in as the authorized admin, show ONLY the Google Sign-In screen (and "Sin acceso" if another account attempted sign-in)
+  // Gate: If not logged in as the authorized admin, show ONLY the Google Sign-In screen
   if (!isVerifiedAdmin) {
     return (
-      <div className="min-h-screen flex items-center justify-center px-4 py-12">
-        <div className="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-2xl p-6 sm:p-8 space-y-6 text-center">
-          <div className="w-12 h-12 mx-auto rounded-2xl bg-sky-500/10 border border-sky-500/30 flex items-center justify-center text-sky-400">
+      <div className="min-h-screen bg-[#000000] text-white flex items-center justify-center px-4 py-12">
+        <div className="w-full max-w-sm bg-[#111111] border border-[#2A2A2A] rounded-2xl p-6 sm:p-8 space-y-6 text-center">
+          <div className="w-12 h-12 mx-auto rounded-2xl bg-[#0A0A0A] border border-[#2A2A2A] flex items-center justify-center text-white">
             {unauthorizedDenied ? (
-              <ShieldAlert className="w-6 h-6 text-rose-400" />
+              <ShieldAlert className="w-6 h-6 text-white" />
             ) : (
-              <Lock className="w-6 h-6" />
+              <Lock className="w-6 h-6 text-white" />
             )}
           </div>
 
@@ -235,14 +265,14 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
             <h1 className="text-xl font-bold text-white">
               Panel de Administración
             </h1>
-            <p className="text-xs text-slate-400">
+            <p className="text-xs text-neutral-400">
               Inicia sesión con tu cuenta de Google autorizada para continuar.
             </p>
           </div>
 
           {unauthorizedDenied && (
             <div
-              className="bg-rose-950/70 border border-rose-500/40 rounded-xl p-3.5 text-sm font-semibold text-rose-200"
+              className="bg-[#0A0A0A] border border-white rounded-xl p-3.5 text-sm font-semibold text-white"
               role="alert"
               data-testid="access-denied-alert"
             >
@@ -251,7 +281,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
           )}
 
           {authError && (
-            <div className="bg-rose-950/60 border border-rose-500/40 rounded-xl p-3 text-xs text-rose-200 text-left">
+            <div className="bg-[#0A0A0A] border border-white rounded-xl p-3 text-xs text-white text-left">
               {authError}
             </div>
           )}
@@ -275,7 +305,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                 }
               }
             }}
-            className="w-full min-h-[48px] px-4 py-3 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold text-sm inline-flex items-center justify-center gap-2 transition-colors cursor-pointer"
+            className="w-full min-h-[48px] px-4 py-3 rounded-xl bg-white hover:bg-neutral-200 text-black font-semibold text-sm inline-flex items-center justify-center gap-2 transition-colors cursor-pointer"
           >
             <span>Iniciar sesión con Google</span>
           </button>
@@ -289,30 +319,36 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
       {/* Admin Header Strip */}
-      <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-6 mb-6 border-b border-slate-800">
+      <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-6 mb-6 border-b border-[#2A2A2A]">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold text-white tracking-tight">
             Panel de Administración
           </h1>
-          <p className="text-xs text-slate-400 mt-1 font-mono">
+          <p className="text-xs text-neutral-400 mt-1 font-mono">
             {currentUser?.email}
           </p>
         </div>
 
         <div className="flex items-center gap-3">
+          {/* Primary Button: White background, black text */}
           <button
             type="button"
-            onClick={() => setIsCreatingNew(true)}
-            className="min-h-[44px] px-4 py-2.5 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold text-xs sm:text-sm inline-flex items-center gap-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            onClick={() => {
+              setFormError(null);
+              setSaveSuccess(null);
+              setIsCreatingNew(true);
+            }}
+            className="min-h-[44px] px-4 py-2.5 rounded-xl bg-white hover:bg-neutral-200 text-black font-semibold text-xs sm:text-sm inline-flex items-center gap-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             <Plus className="w-4 h-4" />
             <span>Nuevo proyecto</span>
           </button>
 
+          {/* Secondary Button: Transparent with white border */}
           <button
             type="button"
             onClick={() => onSignOut()}
-            className="min-h-[44px] px-3.5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 text-xs font-medium inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            className="min-h-[44px] px-3.5 py-2.5 rounded-xl bg-transparent hover:bg-white/10 border border-white text-white text-xs font-medium inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             <LogOut className="w-4 h-4" />
             <span>Cerrar sesión</span>
@@ -320,27 +356,38 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
         </div>
       </header>
 
+      {/* Global Firestore Error Banner if any listener or write failed */}
+      {firestoreError && (
+        <div
+          className="mb-6 bg-[#111111] border border-white rounded-xl p-4 text-xs text-white flex items-start gap-2.5"
+          role="alert"
+        >
+          <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+          <span>{firestoreError}</span>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         {/* Left Sidebar: Project List (4 cols) */}
-        <aside className="lg:col-span-4 bg-slate-900/90 border border-slate-800 rounded-2xl p-4 space-y-3">
+        <aside className="lg:col-span-4 bg-[#111111] border border-[#2A2A2A] rounded-2xl p-4 space-y-3">
           <div className="flex items-center justify-between px-1">
-            <h2 className="text-sm font-semibold text-slate-200">
+            <h2 className="text-sm font-semibold text-white">
               Proyectos ({projects.length})
             </h2>
           </div>
 
           {projects.length === 0 ? (
             <div className="py-8 px-4 text-center space-y-2">
-              <Film className="w-7 h-7 text-slate-600 mx-auto" />
-              <p className="text-sm text-slate-300 font-medium">
+              <Film className="w-7 h-7 text-neutral-500 mx-auto" />
+              <p className="text-sm text-neutral-300 font-medium">
                 Sin proyectos creados
               </p>
-              <p className="text-xs text-slate-500">
-                Usa el botón &ldquo;Nuevo proyecto&rdquo; para crear tu primer enlace de cliente.
+              <p className="text-xs text-neutral-500">
+                Completa el formulario de la derecha o toca &ldquo;Nuevo proyecto&rdquo; para guardar tu primer proyecto en Firestore.
               </p>
             </div>
           ) : (
-            <div className="space-y-2">
+            <div className="space-y-2.5">
               {projects.map((proj) => {
                 const isSelected = !isCreatingNew && selectedProject?.id === proj.id;
                 const st = getStatusVisuals(proj.status);
@@ -349,49 +396,54 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                     key={proj.id}
                     className={`rounded-xl border p-3.5 transition-all ${
                       isSelected
-                        ? 'bg-slate-800/90 border-sky-500/50'
-                        : 'bg-slate-950/60 border-slate-800/80 hover:border-slate-700'
+                        ? 'bg-[#1A1A1A] border-white'
+                        : 'bg-[#0A0A0A] border-[#2A2A2A] hover:border-neutral-500'
                     }`}
                   >
                     <button
                       type="button"
                       onClick={() => {
+                        setFormError(null);
+                        setSaveSuccess(null);
                         setIsCreatingNew(false);
                         onSelectProject(proj.id);
                       }}
-                      className="w-full text-left space-y-1.5 cursor-pointer"
+                      className="w-full text-left space-y-2 cursor-pointer"
                     >
                       <div className="flex items-start justify-between gap-2">
                         <span className="text-sm font-semibold text-white line-clamp-1">
                           {proj.title}
                         </span>
-                        <span className="font-mono tabular-nums text-xs text-slate-300 shrink-0">
+                        <span className="font-mono tabular-nums text-xs text-neutral-200 shrink-0">
                           {formatPrice(proj.price, proj.currency)}
                         </span>
                       </div>
 
-                      <div className="flex items-center justify-between gap-2 text-xs text-slate-400">
+                      <div className="flex items-center justify-between gap-2 text-xs text-neutral-400">
                         <span className="truncate">{proj.clientName}</span>
-                        <span className={`font-medium shrink-0 ${st.textColor}`}>
-                          {proj.status}
+                        <span className={`inline-flex items-center gap-1 text-[11px] shrink-0 ${st.listTextClass}`}>
+                          {proj.status === 'Aprobado' && <CheckCircle2 className="w-3 h-3" />}
+                          {proj.status === 'Cambios solicitados' && <AlertCircle className="w-3 h-3" />}
+                          {proj.status === 'En revisión' && <Clock className="w-3 h-3" />}
+                          <span>{proj.status}</span>
                         </span>
                       </div>
                     </button>
 
-                    <div className="mt-3 pt-2.5 border-t border-slate-800/80 flex items-center justify-between gap-2">
+                    <div className="mt-3 pt-2.5 border-t border-[#2A2A2A] flex items-center justify-between gap-2">
                       <button
                         type="button"
                         onClick={() => handleCopyClientLink(proj.id)}
-                        className="min-h-[36px] px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700/80 text-xs font-medium text-slate-200 inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+                        className="min-h-[36px] px-2.5 py-1 rounded-lg bg-transparent hover:bg-white/10 border border-white text-xs font-medium text-white inline-flex items-center gap-1.5 transition-colors cursor-pointer"
                       >
                         {copiedId === proj.id ? (
                           <>
-                            <Check className="w-3.5 h-3.5 text-emerald-400" />
-                            <span className="text-emerald-300">¡Enlace copiado!</span>
+                            <Check className="w-3.5 h-3.5 text-white" />
+                            <span>¡Enlace copiado!</span>
                           </>
                         ) : (
                           <>
-                            <Copy className="w-3.5 h-3.5 text-sky-400" />
+                            <Copy className="w-3.5 h-3.5 text-white" />
                             <span>Copiar enlace del cliente</span>
                           </>
                         )}
@@ -401,8 +453,8 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                         href={`/ver/${encodeURIComponent(proj.id)}`}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="min-h-[36px] px-2 py-1 rounded-lg text-xs font-medium text-sky-400 hover:text-sky-300 inline-flex items-center gap-1 transition-colors"
-                        title="Abrir enlace del cliente en pestaña nueva"
+                        className="min-h-[36px] px-2 py-1 rounded-lg text-xs font-medium text-neutral-300 hover:text-white inline-flex items-center gap-1 transition-colors"
+                        title="Abrir página del cliente en pestaña nueva"
                       >
                         <ExternalLink className="w-3.5 h-3.5" />
                       </a>
@@ -417,8 +469,8 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
         {/* Right Editor & Comments Workspace (8 cols) */}
         <div className="lg:col-span-8 space-y-6">
           {/* Project Form Card */}
-          <section className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 sm:p-6">
-            <div className="flex flex-wrap items-center justify-between gap-3 pb-4 mb-5 border-b border-slate-800">
+          <section className="bg-[#111111] border border-[#2A2A2A] rounded-2xl p-5 sm:p-6">
+            <div className="flex flex-wrap items-center justify-between gap-3 pb-4 mb-5 border-b border-[#2A2A2A]">
               <div>
                 <h2 className="text-base sm:text-lg font-bold text-white">
                   {isCreatingNew || !selectedProject
@@ -426,7 +478,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                     : `Editar: ${selectedProject.title}`}
                 </h2>
                 {!isCreatingNew && selectedProject && (
-                  <p className="text-xs text-slate-400 font-mono mt-0.5">
+                  <p className="text-xs text-neutral-400 font-mono mt-0.5">
                     /ver/{selectedProject.id}
                   </p>
                 )}
@@ -437,16 +489,16 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                   <button
                     type="button"
                     onClick={() => handleCopyClientLink(selectedProject.id)}
-                    className="min-h-[40px] px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 text-xs font-medium inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+                    className="min-h-[40px] px-3 py-2 rounded-xl bg-transparent hover:bg-white/10 border border-white text-white text-xs font-medium inline-flex items-center gap-1.5 transition-colors cursor-pointer"
                   >
                     {copiedId === selectedProject.id ? (
                       <>
-                        <Check className="w-4 h-4 text-emerald-400" />
-                        <span className="text-emerald-300">Enlace copiado</span>
+                        <Check className="w-4 h-4 text-white" />
+                        <span>Enlace copiado</span>
                       </>
                     ) : (
                       <>
-                        <Copy className="w-4 h-4 text-sky-400" />
+                        <Copy className="w-4 h-4 text-white" />
                         <span>Copiar enlace del cliente</span>
                       </>
                     )}
@@ -460,7 +512,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                 <div>
                   <label
                     htmlFor="proj-title"
-                    className="block text-xs font-medium text-slate-300 mb-1.5"
+                    className="block text-xs font-medium text-neutral-300 mb-1.5"
                   >
                     Título del proyecto
                   </label>
@@ -474,14 +526,14 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                       setFormState((prev) => ({ ...prev, title: e.target.value }))
                     }
                     placeholder="Ej. Reel Campaña Verano"
-                    className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-sky-400"
+                    className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-[#0A0A0A] border border-[#2A2A2A] text-sm text-white placeholder-neutral-500 focus:outline-none focus:border-white"
                   />
                 </div>
 
                 <div>
                   <label
                     htmlFor="proj-client"
-                    className="block text-xs font-medium text-slate-300 mb-1.5"
+                    className="block text-xs font-medium text-neutral-300 mb-1.5"
                   >
                     Nombre del cliente
                   </label>
@@ -498,7 +550,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                       }))
                     }
                     placeholder="Ej. Valeria Mendoza"
-                    className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-sky-400"
+                    className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-[#0A0A0A] border border-[#2A2A2A] text-sm text-white placeholder-neutral-500 focus:outline-none focus:border-white"
                   />
                 </div>
               </div>
@@ -506,7 +558,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
               <div>
                 <label
                   htmlFor="proj-video-url"
-                  className="block text-xs font-medium text-slate-300 mb-1.5"
+                  className="block text-xs font-medium text-neutral-300 mb-1.5"
                 >
                   Enlace del video (URL directa a archivo .mp4)
                 </label>
@@ -523,7 +575,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                     }))
                   }
                   placeholder="https://.../video.mp4"
-                  className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white font-mono placeholder-slate-500 focus:outline-none focus:border-sky-400"
+                  className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-[#0A0A0A] border border-[#2A2A2A] text-sm text-white font-mono placeholder-neutral-500 focus:outline-none focus:border-white"
                 />
               </div>
 
@@ -531,7 +583,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                 <div>
                   <label
                     htmlFor="proj-currency"
-                    className="block text-xs font-medium text-slate-300 mb-1.5"
+                    className="block text-xs font-medium text-neutral-300 mb-1.5"
                   >
                     Moneda
                   </label>
@@ -544,7 +596,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                         currency: e.target.value as CurrencyCode,
                       }))
                     }
-                    className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white focus:outline-none focus:border-sky-400"
+                    className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-[#0A0A0A] border border-[#2A2A2A] text-sm text-white focus:outline-none focus:border-white"
                   >
                     {VALID_CURRENCIES.map((c) => (
                       <option key={c} value={c}>
@@ -557,7 +609,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                 <div>
                   <label
                     htmlFor="proj-price"
-                    className="block text-xs font-medium text-slate-300 mb-1.5"
+                    className="block text-xs font-medium text-neutral-300 mb-1.5"
                   >
                     Precio
                   </label>
@@ -573,14 +625,14 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                         price: parseFloat(e.target.value) || 0,
                       }))
                     }
-                    className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white font-mono tabular-nums focus:outline-none focus:border-sky-400"
+                    className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-[#0A0A0A] border border-[#2A2A2A] text-sm text-white font-mono tabular-nums focus:outline-none focus:border-white"
                   />
                 </div>
 
                 <div>
                   <label
                     htmlFor="proj-status"
-                    className="block text-xs font-medium text-slate-300 mb-1.5"
+                    className="block text-xs font-medium text-neutral-300 mb-1.5"
                   >
                     Estado del proyecto
                   </label>
@@ -593,7 +645,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                         status: e.target.value as ProjectStatus,
                       }))
                     }
-                    className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white focus:outline-none focus:border-sky-400"
+                    className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-[#0A0A0A] border border-[#2A2A2A] text-sm text-white focus:outline-none focus:border-white"
                   >
                     {VALID_STATUSES.map((st) => (
                       <option key={st} value={st}>
@@ -605,17 +657,17 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
-                <label className="flex items-center justify-between gap-3 p-3.5 rounded-xl bg-slate-950 border border-slate-800 cursor-pointer">
+                <label className="flex items-center justify-between gap-3 p-3.5 rounded-xl bg-[#0A0A0A] border border-[#2A2A2A] cursor-pointer">
                   <div className="space-y-0.5">
-                    <span className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
+                    <span className="text-xs font-semibold text-white flex items-center gap-1.5">
                       {formState.showPrice ? (
-                        <Eye className="w-4 h-4 text-sky-400" />
+                        <Eye className="w-4 h-4 text-white" />
                       ) : (
-                        <EyeOff className="w-4 h-4 text-slate-500" />
+                        <EyeOff className="w-4 h-4 text-neutral-500" />
                       )}
                       <span>Mostrar precio al cliente</span>
                     </span>
-                    <p className="text-xs text-slate-400">
+                    <p className="text-xs text-neutral-400">
                       Visible junto al título en la página del cliente
                     </p>
                   </div>
@@ -628,17 +680,17 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                         showPrice: e.target.checked,
                       }))
                     }
-                    className="w-5 h-5 accent-sky-400 rounded cursor-pointer"
+                    className="w-5 h-5 accent-white rounded cursor-pointer"
                   />
                 </label>
 
-                <label className="flex items-center justify-between gap-3 p-3.5 rounded-xl bg-slate-950 border border-slate-800 cursor-pointer">
+                <label className="flex items-center justify-between gap-3 p-3.5 rounded-xl bg-[#0A0A0A] border border-[#2A2A2A] cursor-pointer">
                   <div className="space-y-0.5">
-                    <span className="text-xs font-semibold text-slate-200">
+                    <span className="text-xs font-semibold text-white">
                       Activar marca de agua
                     </span>
-                    <p className="text-xs text-slate-400">
-                      Superpone texto semitransparente sobre el video
+                    <p className="text-xs text-neutral-400">
+                      Superpone texto blanco semitransparente sobre el video
                     </p>
                   </div>
                   <input
@@ -650,7 +702,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                         watermarkEnabled: e.target.checked,
                       }))
                     }
-                    className="w-5 h-5 accent-sky-400 rounded cursor-pointer"
+                    className="w-5 h-5 accent-white rounded cursor-pointer"
                   />
                 </label>
               </div>
@@ -659,7 +711,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                 <div>
                   <label
                     htmlFor="proj-watermark-text"
-                    className="block text-xs font-medium text-slate-300 mb-1.5"
+                    className="block text-xs font-medium text-neutral-300 mb-1.5"
                   >
                     Texto de la marca de agua
                   </label>
@@ -675,14 +727,14 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                       }))
                     }
                     placeholder="Ej. VISTA PREVIA"
-                    className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-sky-400"
+                    className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-[#0A0A0A] border border-[#2A2A2A] text-sm text-white placeholder-neutral-500 focus:outline-none focus:border-white"
                   />
                 </div>
 
                 <div>
                   <label
                     htmlFor="proj-whatsapp"
-                    className="block text-xs font-medium text-slate-300 mb-1.5"
+                    className="block text-xs font-medium text-neutral-300 mb-1.5"
                   >
                     WhatsApp para botón de pago / entrega (con código de país)
                   </label>
@@ -698,24 +750,32 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                       }))
                     }
                     placeholder="Ej. 51987654321"
-                    className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white font-mono tabular-nums placeholder-slate-500 focus:outline-none focus:border-sky-400"
+                    className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-[#0A0A0A] border border-[#2A2A2A] text-sm text-white font-mono tabular-nums placeholder-neutral-500 focus:outline-none focus:border-white"
                   />
                 </div>
               </div>
 
               {formError && (
-                <div className="p-3 rounded-xl bg-rose-950/70 border border-rose-500/40 text-xs text-rose-200">
-                  {formError}
+                <div
+                  className="p-3.5 rounded-xl bg-[#0A0A0A] border border-white text-xs text-white flex items-start gap-2"
+                  role="alert"
+                >
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>{formError}</span>
                 </div>
               )}
 
               {saveSuccess && (
-                <div className="p-3 rounded-xl bg-emerald-950/70 border border-emerald-500/40 text-xs text-emerald-200">
-                  {saveSuccess}
+                <div
+                  className="p-3.5 rounded-xl bg-white text-black font-semibold text-xs flex items-center gap-2"
+                  role="status"
+                >
+                  <CheckCircle2 className="w-4 h-4 shrink-0" />
+                  <span>{saveSuccess}</span>
                 </div>
               )}
 
-              <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-slate-800">
+              <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-[#2A2A2A]">
                 <div>
                   {!isCreatingNew && selectedProject && (
                     <>
@@ -725,14 +785,14 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                             type="button"
                             disabled={isSaving}
                             onClick={() => handleConfirmDelete(selectedProject.id)}
-                            className="min-h-[40px] px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold cursor-pointer"
+                            className="min-h-[40px] px-3 py-1.5 rounded-xl bg-white hover:bg-neutral-200 text-black text-xs font-semibold cursor-pointer"
                           >
                             Confirmar eliminación
                           </button>
                           <button
                             type="button"
                             onClick={() => setConfirmDeleteId(null)}
-                            className="min-h-[40px] px-3 py-1.5 rounded-xl bg-slate-800 text-slate-300 text-xs font-medium cursor-pointer"
+                            className="min-h-[40px] px-3 py-1.5 rounded-xl bg-transparent border border-white text-white text-xs font-medium cursor-pointer"
                           >
                             Cancelar
                           </button>
@@ -741,7 +801,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                         <button
                           type="button"
                           onClick={() => setConfirmDeleteId(selectedProject.id)}
-                          className="min-h-[40px] px-3 py-1.5 rounded-xl text-rose-400 hover:bg-rose-950/50 text-xs font-medium inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+                          className="min-h-[40px] px-3 py-1.5 rounded-xl bg-transparent border border-[#2A2A2A] hover:border-white text-neutral-300 hover:text-white text-xs font-medium inline-flex items-center gap-1.5 transition-colors cursor-pointer"
                         >
                           <Trash2 className="w-4 h-4" />
                           <span>Eliminar proyecto</span>
@@ -756,16 +816,17 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                     <button
                       type="button"
                       onClick={() => setIsCreatingNew(false)}
-                      className="min-h-[44px] px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs sm:text-sm font-medium transition-colors cursor-pointer"
+                      className="min-h-[44px] px-4 py-2 rounded-xl bg-transparent hover:bg-white/10 border border-white text-white text-xs sm:text-sm font-medium transition-colors cursor-pointer"
                     >
                       Cancelar
                     </button>
                   )}
 
+                  {/* Primary Save/Create Button: White background, black text */}
                   <button
                     type="submit"
                     disabled={isSaving}
-                    className="min-h-[44px] px-5 py-2.5 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold text-xs sm:text-sm inline-flex items-center gap-2 transition-colors cursor-pointer"
+                    className="min-h-[44px] px-5 py-2.5 rounded-xl bg-white hover:bg-neutral-200 text-black font-semibold text-xs sm:text-sm inline-flex items-center gap-2 transition-colors cursor-pointer"
                   >
                     <Save className="w-4 h-4" />
                     <span>
@@ -783,44 +844,44 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
 
           {/* Comments Moderation Section for Selected Project */}
           {!isCreatingNew && selectedProject && (
-            <section className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 sm:p-6">
-              <div className="flex items-center justify-between gap-2 pb-4 mb-4 border-b border-slate-800">
+            <section className="bg-[#111111] border border-[#2A2A2A] rounded-2xl p-5 sm:p-6">
+              <div className="flex items-center justify-between gap-2 pb-4 mb-4 border-b border-[#2A2A2A]">
                 <div>
                   <h3 className="text-base font-bold text-white">
                     Comentarios del cliente ({sortedComments.length})
                   </h3>
-                  <p className="text-xs text-slate-400 mt-0.5">
+                  <p className="text-xs text-neutral-400 mt-0.5">
                     Marca los comentarios como resueltos a medida que apliques los cambios en el video
                   </p>
                 </div>
               </div>
 
               {sortedComments.length === 0 ? (
-                <p className="text-sm text-slate-400 py-6 text-center">
+                <p className="text-sm text-neutral-400 py-6 text-center">
                   El cliente aún no ha dejado comentarios en este proyecto.
                 </p>
               ) : (
-                <div className="divide-y divide-slate-800/80">
+                <div className="divide-y divide-[#2A2A2A]">
                   {sortedComments.map((c) => (
                     <div
                       key={c.id}
                       className="py-3.5 flex items-start justify-between gap-4"
                     >
                       <div className="flex items-start gap-3 min-w-0">
-                        <span className="font-mono tabular-nums text-xs font-semibold px-2.5 py-1 rounded-lg bg-slate-800 text-sky-300 shrink-0 mt-0.5">
+                        <span className="font-mono tabular-nums text-xs font-semibold px-2.5 py-1 rounded-lg bg-[#0A0A0A] border border-[#2A2A2A] text-white shrink-0 mt-0.5">
                           {formatVideoTimestamp(c.videoSecond)}
                         </span>
                         <div className="min-w-0 space-y-1">
                           <div className="flex items-center gap-2 text-xs">
-                            <span className="font-semibold text-slate-200">
+                            <span className="font-semibold text-white">
                               {c.authorName}
                             </span>
                           </div>
                           <p
                             className={`text-sm break-words ${
                               c.resolved
-                                ? 'line-through text-slate-500'
-                                : 'text-slate-200'
+                                ? 'line-through text-neutral-500'
+                                : 'text-neutral-200'
                             }`}
                           >
                             {c.text}
@@ -830,21 +891,21 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
 
                       <button
                         type="button"
-                        onClick={() => onToggleCommentResolved(c.id, c.resolved)}
+                        onClick={() => handleResolveClick(c.id, c.resolved)}
                         className={`min-h-[40px] px-3 py-1.5 rounded-xl text-xs font-medium inline-flex items-center gap-1.5 shrink-0 transition-colors cursor-pointer ${
                           c.resolved
-                            ? 'bg-emerald-950/60 border border-emerald-500/40 text-emerald-300'
-                            : 'bg-slate-800 hover:bg-slate-700 text-slate-200'
+                            ? 'bg-white text-black font-semibold'
+                            : 'bg-transparent hover:bg-white/10 border border-white text-white'
                         }`}
                       >
                         {c.resolved ? (
                           <>
-                            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                            <CheckCircle2 className="w-4 h-4" />
                             <span>Resuelto</span>
                           </>
                         ) : (
                           <>
-                            <Circle className="w-4 h-4 text-slate-400" />
+                            <Circle className="w-4 h-4" />
                             <span>Marcar resuelto</span>
                           </>
                         )}

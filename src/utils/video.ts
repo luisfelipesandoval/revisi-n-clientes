@@ -124,36 +124,35 @@ export function formatPrice(price: number, currency: 'S/' | '$'): string {
 }
 
 /**
- * Returns semantic metadata for project statuses.
+ * Returns monochrome visual classes for project statuses:
+ * - "En revisión": dotted/dashed border (borde punteado)
+ * - "Cambios solicitados": solid white border (borde sólido)
+ * - "Aprobado": white background with black text (fondo blanco con texto negro)
  */
 export function getStatusVisuals(status: ProjectStatus): {
   label: ProjectStatus;
-  textColor: string;
-  borderColor: string;
-  bgColor: string;
+  badgeClass: string;
+  listTextClass: string;
 } {
   switch (status) {
     case 'Aprobado':
       return {
         label: 'Aprobado',
-        textColor: 'text-emerald-300',
-        borderColor: 'border-emerald-500/40',
-        bgColor: 'bg-emerald-950/60',
+        badgeClass: 'bg-white text-black border border-solid border-white font-semibold',
+        listTextClass: 'bg-white text-black px-2 py-0.5 rounded font-semibold',
       };
     case 'Cambios solicitados':
       return {
         label: 'Cambios solicitados',
-        textColor: 'text-rose-300',
-        borderColor: 'border-rose-500/40',
-        bgColor: 'bg-rose-950/60',
+        badgeClass: 'bg-transparent text-white border border-solid border-white font-medium',
+        listTextClass: 'text-white border border-solid border-white px-2 py-0.5 rounded font-medium',
       };
     case 'En revisión':
     default:
       return {
         label: 'En revisión',
-        textColor: 'text-amber-300',
-        borderColor: 'border-amber-500/40',
-        bgColor: 'bg-amber-950/60',
+        badgeClass: 'bg-transparent text-neutral-200 border border-dashed border-neutral-400 font-medium',
+        listTextClass: 'text-neutral-300 border border-dashed border-neutral-500 px-2 py-0.5 rounded font-medium',
       };
   }
 }

@@ -1,0 +1,181 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net: Default-deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Reusable Hardened Global Helpers
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn() &&
+        request.auth.token.email_verified == true &&
+        request.auth.token.email == 'chat.gpt.sandoval@gmail.com';
+    }
+
+    // Project Schema Validation Blueprint
+    function isValidProject(data) {
+      return data.keys().hasAll([
+          'title',
+          'clientName',
+          'videoUrl',
+          'price',
+          'currency',
+          'showPrice',
+          'watermarkEnabled',
+          'watermarkText',
+          'status',
+          'whatsappNumber',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'title',
+          'clientName',
+          'videoUrl',
+          'price',
+          'currency',
+          'showPrice',
+          'watermarkEnabled',
+          'watermarkText',
+          'status',
+          'whatsappNumber',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
+        data.clientName is string && data.clientName.size() >= 1 && data.clientName.size() <= 100 &&
+        data.videoUrl is string && data.videoUrl.size() >= 1 && data.videoUrl.size() <= 500 &&
+        (data.price is int || data.price is float) && data.price >= 0 && data.price <= 100000000 &&
+        data.currency is string && data.currency.size() >= 1 && data.currency.size() <= 5 &&
+        data.currency in ['S/', '$'] &&
+        data.showPrice is bool &&
+        data.watermarkEnabled is bool &&
+        data.watermarkText is string && data.watermarkText.size() >= 0 && data.watermarkText.size() <= 100 &&
+        data.status is string && data.status.size() >= 1 && data.status.size() <= 40 &&
+        data.status in ['En revisión', 'Cambios solicitados', 'Aprobado'] &&
+        data.whatsappNumber is string && data.whatsappNumber.size() >= 0 && data.whatsappNumber.size() <= 30 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    // Comment Schema Validation Blueprint
+    function isValidComment(data) {
+      return data.keys().hasAll([
+          'projectId',
+          'authorName',
+          'text',
+          'videoSecond',
+          'createdAt',
+          'resolved'
+        ]) &&
+        data.keys().hasOnly([
+          'projectId',
+          'authorName',
+          'text',
+          'videoSecond',
+          'createdAt',
+          'resolved'
+        ]) &&
+        isValidId(data.projectId) &&
+        data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 80 &&
+        data.text is string && data.text.size() >= 1 && data.text.size() <= 1000 &&
+        (data.videoSecond is int || data.videoSecond is float) && data.videoSecond >= 0 && data.videoSecond <= 86400 &&
+        data.createdAt is timestamp &&
+        data.resolved is bool;
+    }
+
+    // Projects Collection
+    match /projects/{projectId} {
+      // Cualquiera con el enlace único puede leer UN proyecto
+      allow get: if isValidId(projectId);
+
+      // Solo el admin puede listar proyectos
+      allow list: if isAdmin() && existing().status in ['En revisión', 'Cambios solicitados', 'Aprobado'];
+
+      // Solo el admin puede crear proyectos
+      allow create: if isAdmin() &&
+        isValidId(projectId) &&
+        isValidProject(incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      // Action-Based Update:
+      // 1) Admin puede editar todos los campos del proyecto manteniendo createdAt inmutable.
+      // 2) Cualquiera con el enlace puede cambiar SOLO el campo 'status' entre los tres estados válidos.
+      allow update: if isValidId(projectId) &&
+        isValidProject(incoming()) &&
+        incoming().createdAt == existing().createdAt && (
+          (
+            isAdmin() &&
+            incoming().updatedAt == request.time &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'title',
+              'clientName',
+              'videoUrl',
+              'price',
+              'currency',
+              'showPrice',
+              'watermarkEnabled',
+              'watermarkText',
+              'status',
+              'whatsappNumber',
+              'updatedAt'
+            ])
+          ) ||
+          (
+            incoming().diff(existing()).affectedKeys().hasOnly(['status']) &&
+            incoming().status in ['En revisión', 'Cambios solicitados', 'Aprobado']
+          )
+        );
+
+      // Solo el admin puede eliminar un proyecto
+      allow delete: if isAdmin() && isValidId(projectId);
+    }
+
+    // Comments Collection
+    match /comments/{commentId} {
+      // Cualquiera con el enlace del proyecto puede leer los comentarios de ese proyecto
+      allow get: if isValidId(commentId) && isValidId(existing().projectId);
+      allow list: if isValidId(existing().projectId);
+
+      // Cualquiera con el enlace de un proyecto existente puede crear un comentario nuevo (no resuelto)
+      allow create: if isValidId(commentId) &&
+        isValidComment(incoming()) &&
+        incoming().resolved == false &&
+        incoming().createdAt == request.time &&
+        exists(/databases/$(database)/documents/projects/$(incoming().projectId));
+
+      // Solo el admin puede marcar o desmarcar un comentario como resuelto
+      allow update: if isAdmin() &&
+        isValidId(commentId) &&
+        isValidComment(incoming()) &&
+        incoming().projectId == existing().projectId &&
+        incoming().authorName == existing().authorName &&
+        incoming().text == existing().text &&
+        incoming().videoSecond == existing().videoSecond &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['resolved']);
+
+      // Solo el admin puede eliminar comentarios
+      allow delete: if isAdmin() && isValidId(commentId);
+    }
+  }
+}

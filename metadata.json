@@ -1,0 +1,6 @@
+{
+  "name": "ClipReview - Revisión y Aprobación de Videos",
+  "description": "Plataforma sencilla en español para compartir videos verticales con clientes, recibir comentarios en segundos exactos y gestionar aprobaciones.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

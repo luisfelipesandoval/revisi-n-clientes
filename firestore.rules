@@ -56,6 +56,7 @@ service cloud.firestore {
           'watermarkText',
           'status',
           'whatsappNumber',
+          'descargaHabilitada',
           'createdAt',
           'updatedAt'
         ]) &&
@@ -71,7 +72,21 @@ service cloud.firestore {
         data.status is string && data.status.size() >= 1 && data.status.size() <= 40 &&
         data.status in ['En revisión', 'Cambios solicitados', 'Aprobado'] &&
         data.whatsappNumber is string && data.whatsappNumber.size() >= 0 && data.whatsappNumber.size() <= 30 &&
+        (!('descargaHabilitada' in data) || data.descargaHabilitada is bool) &&
         data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidEntrega(data) {
+      return data.keys().hasAll([
+          'finalVideoUrl',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'finalVideoUrl',
+          'updatedAt'
+        ]) &&
+        data.finalVideoUrl is string && data.finalVideoUrl.size() >= 0 && data.finalVideoUrl.size() <= 500 &&
         data.updatedAt is timestamp;
     }
 
@@ -100,7 +115,7 @@ service cloud.firestore {
         data.resolved is bool;
     }
 
-    // Colección projects
+    // Colección projects (solo contiene el video de vista previa)
     match /projects/{projectId} {
       // Cualquiera puede LEER un proyecto solo si conoce su ID exacto
       allow get: if isValidId(projectId);
@@ -114,11 +129,13 @@ service cloud.firestore {
         projectId.size() >= 20 &&
         isValidProject(incoming());
 
-      // Admin puede editar todo; el cliente solo puede cambiar el campo 'status' entre los 3 valores válidos
+      // Admin puede editar todo; el cliente solo puede cambiar el campo 'status'
+      // entre los 3 valores válidos y ÚNICAMENTE mientras descargaHabilitada sea false.
       allow update: if isValidId(projectId) &&
         isValidProject(incoming()) && (
           isAdmin() ||
           (
+            (!('descargaHabilitada' in existing()) || existing().descargaHabilitada == false) &&
             incoming().diff(existing()).affectedKeys().hasOnly(['status']) &&
             incoming().status in ['En revisión', 'Cambios solicitados', 'Aprobado']
           )
@@ -128,24 +145,39 @@ service cloud.firestore {
       allow delete: if isAdmin() && isValidId(projectId);
     }
 
+    // Colección entregas (contiene finalVideoUrl sin marca de agua)
+    match /entregas/{projectId} {
+      // Cualquiera puede leer entregas/ID SOLO si el proyecto projects/ID tiene descargaHabilitada == true (o si es el admin)
+      allow get: if isValidId(projectId) && (
+        isAdmin() ||
+        (
+          exists(/databases/$(database)/documents/projects/$(projectId)) &&
+          get(/databases/$(database)/documents/projects/$(projectId)).data.descargaHabilitada == true
+        )
+      );
+
+      allow list: if isAdmin();
+
+      // Solo el admin puede crear, editar o borrar en entregas
+      allow create: if isAdmin() && isValidId(projectId) && isValidEntrega(incoming());
+      allow update: if isAdmin() && isValidId(projectId) && isValidEntrega(incoming());
+      allow delete: if isAdmin() && isValidId(projectId);
+    }
+
     // Colección comments
     match /comments/{commentId} {
-      // Lectura de comentarios del proyecto
       allow get: if isValidId(commentId);
       allow list: if true;
 
-      // Cualquiera con el enlace de un proyecto existente puede crear comentarios en él
       allow create: if isValidId(commentId) &&
         isValidComment(incoming()) &&
         incoming().resolved == false &&
         exists(/databases/$(database)/documents/projects/$(incoming().projectId));
 
-      // Solo el admin puede marcar comentarios como resueltos o editarlos
       allow update: if isAdmin() &&
         isValidId(commentId) &&
         isValidComment(incoming());
 
-      // Solo el admin puede borrar comentarios
       allow delete: if isAdmin() && isValidId(commentId);
     }
   }

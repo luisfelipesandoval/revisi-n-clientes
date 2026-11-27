@@ -5,6 +5,10 @@ import {
   validateClientStatusUpdate,
   validateCommentCreatePayload,
   isAuthorizedAdminUser,
+  generateSecureProjectId,
+  parseRoutePath,
+  isValidId,
+  canClientReadEntrega,
 } from './src/utils/validation';
 
 const NOW = new Date('2026-11-26T14:40:00.000Z');
@@ -12,7 +16,7 @@ const NOW = new Date('2026-11-26T14:40:00.000Z');
 const validProject = {
   title: 'Reel Campaña Black Friday',
   clientName: 'Estudio Lumina',
-  videoUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+  videoUrl: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
   price: 450,
   currency: 'S/' as const,
   showPrice: true,
@@ -20,6 +24,7 @@ const validProject = {
   watermarkText: 'BORRADOR - ESTUDIO LUMINA',
   status: 'En revisión' as const,
   whatsappNumber: '51987654321',
+  descargaHabilitada: false,
   createdAt: NOW,
   updatedAt: NOW,
 };
@@ -51,19 +56,23 @@ test('Dirty Dozen #3: Client price tampering during status update is rejected', 
   assert.equal(validateClientStatusUpdate(tamperedUpdate), false);
 });
 
-test('Dirty Dozen #4: Client invalid status value is rejected', () => {
+test('Dirty Dozen #4: Client invalid status value is rejected, and status update is blocked once descargaHabilitada is true', () => {
   const invalidStatusUpdate = {
     status: 'Pagado',
   };
   assert.equal(validateClientStatusUpdate(invalidStatusUpdate), false);
+  assert.equal(validateClientStatusUpdate({ status: 'Cambios solicitados' }, false), true);
+  assert.equal(validateClientStatusUpdate({ status: 'Aprobado' }, false), true);
+  assert.equal(validateClientStatusUpdate({ status: 'Cambios solicitados' }, true), false);
 });
 
-test('Dirty Dozen #5: Shadow field injection on Project is rejected', () => {
+test('Dirty Dozen #5: Shadow field injection on Project (including finalVideoUrl inside projects) is rejected', () => {
   const shadowProject = {
     ...validProject,
-    isVerified: true,
+    finalVideoUrl: 'https://secret.mp4',
   };
   assert.equal(validateProjectPayload(shadowProject), false);
+  assert.equal(validateProjectPayload(validProject), true);
 });
 
 test('Dirty Dozen #6: Resource poisoning oversized comment text (>1000 chars) is rejected', () => {
@@ -102,7 +111,7 @@ test('Dirty Dozen #8: Pre-resolved comment injection on create is rejected', () 
   assert.equal(validateCommentCreatePayload(preResolvedComment, true), false);
 });
 
-test('Dirty Dozen #9 & #10 & #11 & #12: Invalid IDs, negative timestamps, and empty author names are rejected', () => {
+test('Dirty Dozen #9 & #10 & #11 & #12: Invalid IDs, negative timestamps, and locked entregas read are rejected', () => {
   const badIdComment = {
     projectId: 'proj/invalid$id!',
     authorName: 'Carlos',
@@ -122,9 +131,14 @@ test('Dirty Dozen #9 & #10 & #11 & #12: Invalid IDs, negative timestamps, and em
     createdAt: NOW,
   };
   assert.equal(validateCommentCreatePayload(negativeSecondComment, true), false);
-});
 
-import { generateSecureProjectId, parseRoutePath, isValidId } from './src/utils/validation';
+  // Client cannot read entregas/ID when descargaHabilitada is false
+  assert.equal(canClientReadEntrega(false, false), false);
+  // Client CAN read entregas/ID when descargaHabilitada is true
+  assert.equal(canClientReadEntrega(false, true), true);
+  // Admin can always read entregas/ID
+  assert.equal(canClientReadEntrega(true, false), true);
+});
 
 test('generateSecureProjectId produces random IDs of at least 20 characters', () => {
   const id1 = generateSecureProjectId();
@@ -144,4 +158,3 @@ test('parseRoutePath separates Admin root (/) from Client page (/ver/ID) and fla
   assert.deepEqual(parseRoutePath('/ver/'), { view: 'invalid-client-link' });
   assert.deepEqual(parseRoutePath('/otra-ruta'), { view: 'invalid-client-link' });
 });
-

@@ -85,7 +85,7 @@ export function isAuthorizedAdminUser(
   );
 }
 
-const ALLOWED_PROJECT_KEYS = new Set([
+const REQUIRED_PROJECT_KEYS = [
   'title',
   'clientName',
   'videoUrl',
@@ -98,12 +98,19 @@ const ALLOWED_PROJECT_KEYS = new Set([
   'whatsappNumber',
   'createdAt',
   'updatedAt',
+];
+
+const ALLOWED_PROJECT_KEYS = new Set([
+  ...REQUIRED_PROJECT_KEYS,
+  'descargaHabilitada',
 ]);
 
 export function validateProjectPayload(data: Record<string, unknown>): boolean {
   if (!data || typeof data !== 'object') return false;
   const keys = Object.keys(data);
-  if (keys.length !== ALLOWED_PROJECT_KEYS.size) return false;
+  for (const reqKey of REQUIRED_PROJECT_KEYS) {
+    if (!(reqKey in data)) return false;
+  }
   for (const k of keys) {
     if (!ALLOWED_PROJECT_KEYS.has(k)) return false;
   }
@@ -119,6 +126,7 @@ export function validateProjectPayload(data: Record<string, unknown>): boolean {
     watermarkText,
     status,
     whatsappNumber,
+    descargaHabilitada,
   } = data;
 
   if (typeof title !== 'string' || title.length < 1 || title.length > 120) return false;
@@ -131,16 +139,28 @@ export function validateProjectPayload(data: Record<string, unknown>): boolean {
   if (typeof watermarkText !== 'string' || watermarkText.length > 100) return false;
   if (typeof status !== 'string' || !VALID_STATUSES.includes(status as ProjectStatus)) return false;
   if (typeof whatsappNumber !== 'string' || whatsappNumber.length > 30) return false;
+  if (descargaHabilitada !== undefined && typeof descargaHabilitada !== 'boolean') return false;
 
   return true;
 }
 
-export function validateClientStatusUpdate(updatePayload: Record<string, unknown>): boolean {
+export function validateClientStatusUpdate(
+  updatePayload: Record<string, unknown>,
+  existingDescargaHabilitada = false
+): boolean {
+  if (existingDescargaHabilitada) return false;
   if (!updatePayload || typeof updatePayload !== 'object') return false;
   const keys = Object.keys(updatePayload);
   if (keys.length !== 1 || keys[0] !== 'status') return false;
   const status = updatePayload.status;
   return typeof status === 'string' && VALID_STATUSES.includes(status as ProjectStatus);
+}
+
+export function canClientReadEntrega(
+  isAdmin: boolean,
+  projectDescargaHabilitada: boolean
+): boolean {
+  return isAdmin || projectDescargaHabilitada === true;
 }
 
 const ALLOWED_COMMENT_KEYS = new Set([

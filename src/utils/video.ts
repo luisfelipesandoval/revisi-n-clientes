@@ -1,5 +1,8 @@
 import { VideoComment, ProjectStatus } from '../types';
 
+export const YAPE_NUMBER_DISPLAY = '915 978 491';
+export const YAPE_NUMBER_RAW = '915978491';
+
 export type VideoSourceType =
   | { type: 'mp4'; src: string }
   | { type: 'invalid'; reason: string };
@@ -92,6 +95,24 @@ export function sortCommentsByTime(comments: VideoComment[]): VideoComment[] {
 }
 
 /**
+ * Builds the WhatsApp URL to send the Yape payment screenshot for the project.
+ * Opens https://wa.me/51915978491 with a prefilled message containing the project title.
+ */
+export function buildYapeWhatsAppUrl(projectTitle: string): string {
+  const safeTitle = projectTitle.trim() || 'Video';
+  const message = `Hola, te envío la captura del pago por Yape del proyecto "${safeTitle}".`;
+  return `https://wa.me/51915978491?text=${encodeURIComponent(message)}`;
+}
+
+/**
+ * Formats the final video download filename as "[título del proyecto].mp4".
+ */
+export function formatFinalVideoFilename(projectTitle: string): string {
+  const cleaned = projectTitle.trim() || 'video';
+  return cleaned.toLowerCase().endsWith('.mp4') ? cleaned : `${cleaned}.mp4`;
+}
+
+/**
  * Builds the WhatsApp contact URL when a project is Approved.
  */
 export function buildWhatsAppApprovalUrl(params: {
@@ -155,4 +176,29 @@ export function getStatusVisuals(status: ProjectStatus): {
         listTextClass: 'text-neutral-300 border border-dashed border-neutral-500 px-2 py-0.5 rounded font-medium',
       };
   }
+}
+
+/**
+ * Returns the delivery badge label for the Admin project list:
+ * - "Entregado" when descargaHabilitada === true
+ * - "Pago pendiente" when status === 'Aprobado' and descargaHabilitada === false
+ * - null otherwise
+ */
+export function getAdminDeliveryBadge(
+  status: ProjectStatus,
+  descargaHabilitada: boolean
+): { label: 'Pago pendiente' | 'Entregado'; badgeClass: string } | null {
+  if (descargaHabilitada) {
+    return {
+      label: 'Entregado',
+      badgeClass: 'bg-white text-black border border-solid border-white px-2 py-0.5 rounded font-semibold',
+    };
+  }
+  if (status === 'Aprobado') {
+    return {
+      label: 'Pago pendiente',
+      badgeClass: 'bg-transparent text-white border border-dashed border-white px-2 py-0.5 rounded font-medium',
+    };
+  }
+  return null;
 }

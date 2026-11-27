@@ -69,6 +69,8 @@ export function AppContent() {
   const [selectedAdminProjectId, setSelectedAdminProjectId] = useState<
     string | null
   >(null);
+  const [adminSelectedFinalVideoUrl, setAdminSelectedFinalVideoUrl] =
+    useState<string>('');
   const [adminComments, setAdminComments] = useState<VideoComment[]>([]);
   const [adminFirestoreError, setAdminFirestoreError] = useState<string | null>(
     null
@@ -76,6 +78,9 @@ export function AppContent() {
 
   // Client Page State (only used when route.view === 'client')
   const [clientProject, setClientProject] = useState<Project | null>(null);
+  const [clientFinalVideoUrl, setClientFinalVideoUrl] = useState<string | null>(
+    null
+  );
   const [clientComments, setClientComments] = useState<VideoComment[]>([]);
   const [loadingClientProject, setLoadingClientProject] =
     useState<boolean>(true);
@@ -139,6 +144,7 @@ export function AppContent() {
                 ? data.status
                 : 'En revisión',
             whatsappNumber: String(data.whatsappNumber || ''),
+            descargaHabilitada: Boolean(data.descargaHabilitada),
             createdAt: toDate(data.createdAt),
             updatedAt: toDate(data.updatedAt),
           };
@@ -162,6 +168,36 @@ export function AppContent() {
 
     return () => unsub();
   }, [isRealAdmin]);
+
+  // Listen to entregas/{selectedAdminProjectId} in Admin Zone so Admin can view/edit finalVideoUrl
+  useEffect(() => {
+    if (!isRealAdmin || !selectedAdminProjectId) {
+      setAdminSelectedFinalVideoUrl('');
+      return;
+    }
+
+    const entregaPath = `entregas/${selectedAdminProjectId}`;
+    const unsub = onSnapshot(
+      doc(db, 'entregas', selectedAdminProjectId),
+      (snap) => {
+        if (!snap.exists()) {
+          setAdminSelectedFinalVideoUrl('');
+          return;
+        }
+        const data = snap.data();
+        setAdminSelectedFinalVideoUrl(String(data.finalVideoUrl || ''));
+      },
+      (error) => {
+        try {
+          handleFirestoreError(error, OperationType.GET, entregaPath);
+        } catch (formattedErr) {
+          setAdminFirestoreError(formatReadableFirestoreError(formattedErr));
+        }
+      }
+    );
+
+    return () => unsub();
+  }, [isRealAdmin, selectedAdminProjectId]);
 
   // Listen to comments for the selected project in Admin Zone
   useEffect(() => {
@@ -242,6 +278,7 @@ export function AppContent() {
               ? data.status
               : 'En revisión',
           whatsappNumber: String(data.whatsappNumber || ''),
+          descargaHabilitada: Boolean(data.descargaHabilitada),
           createdAt: toDate(data.createdAt),
           updatedAt: toDate(data.updatedAt),
         });
@@ -297,9 +334,46 @@ export function AppContent() {
     };
   }, [route]);
 
+  // SECURITY: While descargaHabilitada is false, the client page NEVER queries or loads entregas/{projectId}
+  useEffect(() => {
+    if (route.view !== 'client' || !clientProject || !clientProject.descargaHabilitada) {
+      setClientFinalVideoUrl(null);
+      return;
+    }
+
+    const entregaPath = `entregas/${clientProject.id}`;
+    const unsubEntrega = onSnapshot(
+      doc(db, 'entregas', clientProject.id),
+      (snap) => {
+        if (!snap.exists()) {
+          setClientFinalVideoUrl(null);
+          return;
+        }
+        const data = snap.data();
+        const url = String(data.finalVideoUrl || '').trim();
+        setClientFinalVideoUrl(url || null);
+      },
+      (error) => {
+        setClientFinalVideoUrl(null);
+        try {
+          handleFirestoreError(error, OperationType.GET, entregaPath);
+        } catch (formattedErr) {
+          setClientFirestoreError(formatReadableFirestoreError(formattedErr));
+        }
+      }
+    );
+
+    return () => unsubEntrega();
+  }, [route, clientProject?.id, clientProject?.descargaHabilitada]);
+
   // Client Actions (Firestore Only)
   const handleClientUpdateStatus = async (newStatus: ProjectStatus) => {
     if (route.view !== 'client') return;
+    if (clientProject?.descargaHabilitada) {
+      throw new Error(
+        'La descarga ya fue habilitada y el estado del proyecto quedó fijo en Aprobado.'
+      );
+    }
     const path = `projects/${route.projectId}`;
     try {
       await updateDoc(doc(db, 'projects', route.projectId), {
@@ -383,12 +457,20 @@ export function AppContent() {
       watermarkText: input.watermarkText.trim().slice(0, 100),
       status: input.status,
       whatsappNumber: input.whatsappNumber.trim().slice(0, 30),
+      descargaHabilitada: Boolean(input.descargaHabilitada),
     };
+
+    const sanitizedFinalVideoUrl = input.finalVideoUrl.trim().slice(0, 500);
 
     try {
       await setDoc(doc(db, 'projects', newId), {
         ...sanitized,
         createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+
+      await setDoc(doc(db, 'entregas', newId), {
+        finalVideoUrl: sanitizedFinalVideoUrl,
         updatedAt: serverTimestamp(),
       });
 
@@ -405,6 +487,7 @@ export function AppContent() {
         prev.some((p) => p.id === newId) ? prev : [createdProject, ...prev]
       );
       setSelectedAdminProjectId(newId);
+      setAdminSelectedFinalVideoUrl(sanitizedFinalVideoUrl);
       return newId;
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, path);
@@ -430,11 +513,19 @@ export function AppContent() {
       watermarkText: input.watermarkText.trim().slice(0, 100),
       status: input.status,
       whatsappNumber: input.whatsappNumber.trim().slice(0, 30),
+      descargaHabilitada: Boolean(input.descargaHabilitada),
     };
+
+    const sanitizedFinalVideoUrl = input.finalVideoUrl.trim().slice(0, 500);
 
     try {
       await updateDoc(doc(db, 'projects', projectId), {
         ...sanitized,
+        updatedAt: serverTimestamp(),
+      });
+
+      await setDoc(doc(db, 'entregas', projectId), {
+        finalVideoUrl: sanitizedFinalVideoUrl,
         updatedAt: serverTimestamp(),
       });
     } catch (error) {
@@ -456,6 +547,7 @@ export function AppContent() {
       for (const commentDoc of snap.docs) {
         await deleteDoc(doc(db, 'comments', commentDoc.id));
       }
+      await deleteDoc(doc(db, 'entregas', projectId));
       await deleteDoc(doc(db, 'projects', projectId));
       const nextProj = adminProjects.find((p) => p.id !== projectId);
       setSelectedAdminProjectId(nextProj ? nextProj.id : null);
@@ -540,6 +632,9 @@ export function AppContent() {
           <ClientReviewView
             project={clientProject}
             comments={clientComments}
+            finalVideoUrl={
+              clientProject.descargaHabilitada ? clientFinalVideoUrl : null
+            }
             firestoreError={clientFirestoreError}
             onUpdateStatus={handleClientUpdateStatus}
             onAddComment={handleClientAddComment}
@@ -562,6 +657,7 @@ export function AppContent() {
           onSignOut={handleSignOut}
           projects={adminProjects}
           selectedProjectId={selectedAdminProjectId}
+          selectedProjectFinalVideoUrl={adminSelectedFinalVideoUrl}
           onSelectProject={(id) => setSelectedAdminProjectId(id)}
           commentsForSelected={adminComments}
           onCreateProject={handleAdminCreateProject}

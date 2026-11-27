@@ -2,7 +2,7 @@
   "entities": {
     "Project": {
       "title": "Project",
-      "description": "Un proyecto de revisión de video compartido con un cliente mediante enlace único.",
+      "description": "Un proyecto de revisión de video compartido con un cliente mediante enlace único (solo contiene el video de vista previa).",
       "type": "object",
       "properties": {
         "title": {
@@ -19,7 +19,7 @@
         },
         "videoUrl": {
           "type": "string",
-          "description": "Enlace del video (YouTube no listado o archivo directo .mp4)",
+          "description": "Enlace directo .mp4 del video de vista previa",
           "minLength": 1,
           "maxLength": 500
         },
@@ -57,9 +57,13 @@
         },
         "whatsappNumber": {
           "type": "string",
-          "description": "Número de WhatsApp configurable para contacto de pago o entrega",
+          "description": "Número de WhatsApp configurable",
           "minLength": 0,
           "maxLength": 30
+        },
+        "descargaHabilitada": {
+          "type": "boolean",
+          "description": "Indica si el administrador confirmó el pago y habilitó la descarga del video final"
         },
         "createdAt": {
           "type": "string",
@@ -83,9 +87,29 @@
         "watermarkText",
         "status",
         "whatsappNumber",
+        "descargaHabilitada",
         "createdAt",
         "updatedAt"
       ]
+    },
+    "Entrega": {
+      "title": "Entrega",
+      "description": "Documento aislado con el enlace del video final sin marca de agua, legible por el cliente únicamente cuando descargaHabilitada es true en el proyecto.",
+      "type": "object",
+      "properties": {
+        "finalVideoUrl": {
+          "type": "string",
+          "description": "Enlace directo .mp4 del video final sin marca de agua",
+          "minLength": 0,
+          "maxLength": 500
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Fecha de última actualización de la entrega"
+        }
+      },
+      "required": ["finalVideoUrl", "updatedAt"]
     },
     "Comment": {
       "title": "Comment",
@@ -140,7 +164,13 @@
       "schema": {
         "$ref": "#/entities/Project"
       },
-      "description": "Colección de proyectos de video. Lectura individual pública por ID; listado, creación, edición completa y eliminación restringidos al administrador; actualización de estado permitida al cliente con el enlace."
+      "description": "Colección de proyectos de video (vista previa). Lectura individual pública por ID; listado, creación, edición completa y eliminación restringidos al administrador; actualización de estado permitida al cliente solo mientras descargaHabilitada sea false."
+    },
+    "/entregas/{projectId}": {
+      "schema": {
+        "$ref": "#/entities/Entrega"
+      },
+      "description": "Colección aislada con el enlace del video final sin marca de agua. Lectura permitida al cliente solo si projects/{projectId} tiene descargaHabilitada == true. Escritura exclusiva del administrador."
     },
     "/comments/{commentId}": {
       "schema": {

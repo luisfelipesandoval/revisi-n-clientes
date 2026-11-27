@@ -6,7 +6,12 @@ import {
   parseTimestampInput,
   sortCommentsByTime,
   buildWhatsAppApprovalUrl,
+  buildYapeWhatsAppUrl,
+  formatFinalVideoFilename,
+  getAdminDeliveryBadge,
   formatPrice,
+  YAPE_NUMBER_DISPLAY,
+  YAPE_NUMBER_RAW,
 } from './video';
 import { VideoComment } from '../types';
 
@@ -64,4 +69,20 @@ test('buildWhatsAppApprovalUrl and formatPrice generate expected Spanish output'
   assert.ok(waUrl.startsWith('https://wa.me/51999888777?text='));
   assert.ok(decodeURIComponent(waUrl).includes('Reel Lanzamiento'));
   assert.ok(decodeURIComponent(waUrl).includes('S/ 350.00'));
+});
+
+test('Yape payment helpers, final video filename, and delivery badges work as specified', () => {
+  assert.equal(YAPE_NUMBER_DISPLAY, '915 978 491');
+  assert.equal(YAPE_NUMBER_RAW, '915978491');
+
+  const yapeWa = buildYapeWhatsAppUrl('Reel Campaña Verano');
+  assert.ok(yapeWa.startsWith('https://wa.me/51915978491?text='));
+  assert.ok(decodeURIComponent(yapeWa).includes('Reel Campaña Verano'));
+
+  assert.equal(formatFinalVideoFilename('Reel Campaña Verano'), 'Reel Campaña Verano.mp4');
+  assert.equal(formatFinalVideoFilename('Video.mp4'), 'Video.mp4');
+
+  assert.equal(getAdminDeliveryBadge('En revisión', false), null);
+  assert.equal(getAdminDeliveryBadge('Aprobado', false)?.label, 'Pago pendiente');
+  assert.equal(getAdminDeliveryBadge('Aprobado', true)?.label, 'Entregado');
 });

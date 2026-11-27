@@ -14,7 +14,14 @@ export interface Project {
   watermarkText: string;
   status: ProjectStatus;
   whatsappNumber: string;
+  descargaHabilitada: boolean;
   createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface ProjectEntrega {
+  projectId: string;
+  finalVideoUrl: string;
   updatedAt: Date;
 }
 
@@ -32,6 +39,8 @@ export interface ProjectFormInput {
   title: string;
   clientName: string;
   videoUrl: string;
+  finalVideoUrl: string;
+  descargaHabilitada: boolean;
   price: number;
   currency: CurrencyCode;
   showPrice: boolean;

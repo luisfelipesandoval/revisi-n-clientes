@@ -4,11 +4,16 @@ import {
   AlertCircle,
   Clock,
   MessageSquarePlus,
-  MessageCircle,
   Play,
   Send,
   User,
   Check,
+  Lock,
+  Download,
+  Copy,
+  X,
+  CreditCard,
+  ExternalLink,
 } from 'lucide-react';
 import { Project, ProjectStatus, VideoComment } from '../types';
 import {
@@ -16,8 +21,11 @@ import {
   formatVideoTimestamp,
   parseTimestampInput,
   sortCommentsByTime,
-  buildWhatsAppApprovalUrl,
+  buildYapeWhatsAppUrl,
+  formatFinalVideoFilename,
   getStatusVisuals,
+  YAPE_NUMBER_DISPLAY,
+  YAPE_NUMBER_RAW,
 } from '../utils/video';
 import { formatReadableFirestoreError } from '../firebase';
 import { VideoPlayer, VideoPlayerHandle } from './VideoPlayer';
@@ -25,6 +33,11 @@ import { VideoPlayer, VideoPlayerHandle } from './VideoPlayer';
 interface ClientReviewViewProps {
   project: Project;
   comments: VideoComment[];
+  /**
+   * Only populated when project.descargaHabilitada === true.
+   * While descargaHabilitada is false, this is strictly null and never loaded from Firestore.
+   */
+  finalVideoUrl: string | null;
   firestoreError?: string | null;
   onUpdateStatus: (newStatus: ProjectStatus) => Promise<void>;
   onAddComment: (payload: {
@@ -37,6 +50,7 @@ interface ClientReviewViewProps {
 export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
   project,
   comments,
+  finalVideoUrl,
   firestoreError,
   onUpdateStatus,
   onAddComment,
@@ -59,8 +73,17 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
   const [isUpdatingStatus, setIsUpdatingStatus] = useState<boolean>(false);
   const [statusFeedback, setStatusFeedback] = useState<string | null>(null);
 
+  // Yape Payment Modal & Copy state
+  const [isYapeModalOpen, setIsYapeModalOpen] = useState<boolean>(false);
+  const [yapeCopied, setYapeCopied] = useState<boolean>(false);
+  const [isDownloading, setIsDownloading] = useState<boolean>(false);
+
   const sortedComments = sortCommentsByTime(comments);
-  const statusVisual = getStatusVisuals(project.status);
+  const isDownloadEnabled = Boolean(project.descargaHabilitada);
+  const effectiveStatus: ProjectStatus = isDownloadEnabled ? 'Aprobado' : project.status;
+  const statusVisual = getStatusVisuals(effectiveStatus);
+  const finalFilename = formatFinalVideoFilename(project.title);
+  const yapeWhatsAppUrl = buildYapeWhatsAppUrl(project.title);
 
   const handleCaptureMoment = () => {
     const sec = playerRef.current ? playerRef.current.getCurrentSecond() : liveSecond;
@@ -84,21 +107,67 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
   };
 
   const handleStatusChange = async (newStatus: ProjectStatus) => {
-    if (isUpdatingStatus) return;
+    // Once download is enabled, the status remains permanently fixed at "Aprobado"
+    if (isDownloadEnabled || isUpdatingStatus) return;
+
     setIsUpdatingStatus(true);
     setStatusFeedback(null);
     setFormError(null);
     try {
       await onUpdateStatus(newStatus);
-      setStatusFeedback(
-        newStatus === 'Aprobado'
-          ? 'Video aprobado. Ahora puedes contactar para coordinar el pago y la entrega.'
-          : 'Estado actualizado a "Cambios solicitados".'
-      );
+      if (newStatus === 'Aprobado') {
+        setIsYapeModalOpen(true);
+        setStatusFeedback(null);
+      } else {
+        setIsYapeModalOpen(false);
+        setStatusFeedback('Estado actualizado a "Cambios solicitados".');
+      }
     } catch (err) {
       setFormError(formatReadableFirestoreError(err));
     } finally {
       setIsUpdatingStatus(false);
+    }
+  };
+
+  const handleCopyYapeNumber = async () => {
+    try {
+      await navigator.clipboard.writeText(YAPE_NUMBER_RAW);
+    } catch {
+      // Fallback ignored
+    }
+    setYapeCopied(true);
+    window.setTimeout(() => setYapeCopied(false), 2500);
+  };
+
+  const handleDownloadFinalVideo = async () => {
+    if (!isDownloadEnabled || !finalVideoUrl || isDownloading) return;
+    setIsDownloading(true);
+    setFormError(null);
+
+    try {
+      const response = await fetch(finalVideoUrl);
+      if (!response.ok) throw new Error('Direct download fallback');
+      const blob = await response.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = finalFilename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+    } catch {
+      // Fallback if the remote video host blocks fetch via CORS
+      const a = document.createElement('a');
+      a.href = finalVideoUrl;
+      a.download = finalFilename;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    } finally {
+      setIsDownloading(false);
     }
   };
 
@@ -154,15 +223,6 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
     }
   };
 
-  const whatsappUrl = buildWhatsAppApprovalUrl({
-    whatsappNumber: project.whatsappNumber,
-    projectTitle: project.title,
-    clientName: savedClientName || project.clientName,
-    price: project.price,
-    currency: project.currency,
-    showPrice: project.showPrice,
-  });
-
   return (
     <div className="w-full max-w-6xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
       {firestoreError && (
@@ -199,84 +259,136 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
             </h1>
           </div>
 
-          {/* Status Indicator (Monochrome: dotted, solid, or inverted white) & Action Buttons */}
+          {/* Status Indicator & Action Buttons */}
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 shrink-0">
             <div
               className={`inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-xl text-xs ${statusVisual.badgeClass}`}
               data-testid="project-status-badge"
             >
-              {project.status === 'Aprobado' && (
+              {effectiveStatus === 'Aprobado' && (
                 <CheckCircle2 className="w-4 h-4 shrink-0" />
               )}
-              {project.status === 'Cambios solicitados' && (
+              {effectiveStatus === 'Cambios solicitados' && (
                 <AlertCircle className="w-4 h-4 shrink-0" />
               )}
-              {project.status === 'En revisión' && (
+              {effectiveStatus === 'En revisión' && (
                 <Clock className="w-4 h-4 shrink-0" />
               )}
-              <span>Estado: {project.status}</span>
+              <span>Estado: {effectiveStatus}</span>
             </div>
 
-            <div className="grid grid-cols-2 sm:flex items-center gap-2.5">
-              {/* Primary action: White background with black text */}
-              <button
-                type="button"
-                disabled={isUpdatingStatus}
-                onClick={() => handleStatusChange('Aprobado')}
-                className="min-h-[44px] px-4 py-2.5 rounded-xl text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-2 transition-all whitespace-nowrap shrink-0 cursor-pointer bg-white text-black hover:bg-neutral-200"
-              >
-                <CheckCircle2 className="w-4 h-4 shrink-0" />
-                <span>Aprobar</span>
-              </button>
+            {/* Client can switch between "Aprobado" and "Solicitar cambios" freely WHILE download is locked */}
+            {!isDownloadEnabled && (
+              <div className="grid grid-cols-2 sm:flex items-center gap-2.5">
+                <button
+                  type="button"
+                  disabled={isUpdatingStatus}
+                  data-testid="approve-btn"
+                  onClick={() => handleStatusChange('Aprobado')}
+                  className="min-h-[44px] px-4 py-2.5 rounded-xl text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-2 transition-all whitespace-nowrap shrink-0 cursor-pointer bg-white text-black hover:bg-neutral-200"
+                >
+                  <CheckCircle2 className="w-4 h-4 shrink-0" />
+                  <span>Aprobar</span>
+                </button>
 
-              {/* Secondary action: Transparent with white border */}
-              <button
-                type="button"
-                disabled={isUpdatingStatus}
-                onClick={() => handleStatusChange('Cambios solicitados')}
-                className="min-h-[44px] px-4 py-2.5 rounded-xl text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-2 transition-all whitespace-nowrap shrink-0 cursor-pointer bg-transparent text-white border border-white hover:bg-white/10"
-              >
-                <AlertCircle className="w-4 h-4 shrink-0" />
-                <span>Solicitar cambios</span>
-              </button>
-            </div>
+                <button
+                  type="button"
+                  disabled={isUpdatingStatus}
+                  data-testid="request-changes-btn"
+                  onClick={() => handleStatusChange('Cambios solicitados')}
+                  className="min-h-[44px] px-4 py-2.5 rounded-xl text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-2 transition-all whitespace-nowrap shrink-0 cursor-pointer bg-transparent text-white border border-white hover:bg-white/10"
+                >
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>Solicitar cambios</span>
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
-        {statusFeedback && (
+        {statusFeedback && !isDownloadEnabled && (
           <div className="mt-4 pt-3 border-t border-[#2A2A2A] flex items-center justify-between text-xs text-neutral-300">
             <span>{statusFeedback}</span>
           </div>
         )}
 
-        {/* WhatsApp CTA when status is Approved */}
-        {project.status === 'Aprobado' && (
-          <div className="mt-4 pt-4 border-t border-[#2A2A2A] flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-[#0A0A0A] -mx-4 sm:-mx-6 -mb-4 sm:-mb-6 p-4 sm:px-6 rounded-b-2xl">
-            <div className="space-y-0.5">
-              <p className="text-sm font-semibold text-white">
-                Proyecto aprobado para entrega final
-              </p>
-              <p className="text-xs text-neutral-400">
-                Coordina el pago o la descarga del archivo original sin marca de agua por WhatsApp.
-              </p>
-            </div>
-            <a
-              href={whatsappUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              data-testid="whatsapp-contact-btn"
-              className="min-h-[44px] px-5 py-2.5 rounded-xl bg-white hover:bg-neutral-200 text-black font-semibold text-sm inline-flex items-center justify-center gap-2 transition-colors whitespace-nowrap shrink-0"
-            >
-              <MessageCircle className="w-4 h-4 fill-current" />
-              <span>Contactar para el pago / entrega</span>
-            </a>
+        {/* Payment & Delivery Bar when Approved OR when Download is Enabled */}
+        {(effectiveStatus === 'Aprobado' || isDownloadEnabled) && (
+          <div
+            className="mt-4 pt-4 border-t border-[#2A2A2A] flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-[#0A0A0A] -mx-4 sm:-mx-6 -mb-4 sm:-mb-6 p-4 sm:px-6 rounded-b-2xl"
+            data-testid="delivery-actions-bar"
+          >
+            {!isDownloadEnabled ? (
+              <>
+                <div className="flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    data-testid="view-payment-data-btn"
+                    onClick={() => setIsYapeModalOpen(true)}
+                    className="min-h-[44px] px-4 py-2.5 rounded-xl bg-transparent hover:bg-white/10 border border-white text-white text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                  >
+                    <CreditCard className="w-4 h-4 shrink-0" />
+                    <span>Ver datos de pago</span>
+                  </button>
+                </div>
+
+                <div className="flex flex-col sm:items-end gap-1.5">
+                  <button
+                    type="button"
+                    disabled
+                    data-testid="locked-download-btn"
+                    className="min-h-[44px] px-4 py-2.5 rounded-xl bg-[#1A1A1A] border border-[#2A2A2A] text-neutral-500 text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-2 cursor-not-allowed select-none"
+                  >
+                    <Lock className="w-4 h-4 shrink-0" />
+                    <span>Descargar video</span>
+                  </button>
+                  <span
+                    className="text-xs text-neutral-400"
+                    data-testid="locked-download-helper"
+                  >
+                    Se habilita al confirmar el pago
+                  </span>
+                </div>
+              </>
+            ) : (
+              <div className="w-full flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div className="space-y-0.5">
+                  <p className="text-sm font-semibold text-white">
+                    Entrega final habilitada
+                  </p>
+                  <p className="text-xs text-neutral-400 font-mono">
+                    Archivo: {finalFilename}
+                  </p>
+                </div>
+
+                {finalVideoUrl ? (
+                  <button
+                    type="button"
+                    onClick={handleDownloadFinalVideo}
+                    disabled={isDownloading}
+                    data-testid="active-download-btn"
+                    title={`Descargar ${finalFilename}`}
+                    className="min-h-[44px] px-5 py-2.5 rounded-xl bg-white hover:bg-neutral-200 text-black font-semibold text-xs sm:text-sm inline-flex items-center justify-center gap-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                  >
+                    <Download className="w-4 h-4 shrink-0" />
+                    <span>
+                      {isDownloading ? 'Descargando...' : 'Descargar video'}
+                    </span>
+                  </button>
+                ) : (
+                  <span className="text-xs text-neutral-400">
+                    Preparando enlace de descarga...
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         )}
       </section>
 
       {/* Main 2-Column Layout: Video Left/Center (7 cols) + Time-coded Comments Right/Bottom (5 cols) */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        {/* Left/Top Column: Centered Vertical Video Player */}
+        {/* Left/Top Column: Centered Vertical Video Player (always plays preview video with watermark) */}
         <div className="lg:col-span-7 bg-[#111111] border border-[#2A2A2A] rounded-2xl p-4 sm:p-6 flex flex-col items-center">
           <VideoPlayer
             ref={playerRef}
@@ -525,6 +637,118 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
           </div>
         </aside>
       </div>
+
+      {/* Yape Payment Modal ("Pago por Yape") */}
+      {isYapeModalOpen && !isDownloadEnabled && (
+        <div
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="yape-modal-title"
+          data-testid="yape-payment-modal"
+        >
+          <div className="w-full max-w-md bg-[#111111] border border-white rounded-2xl p-6 space-y-5 text-white shadow-2xl">
+            <div className="flex items-center justify-between gap-3 pb-3 border-b border-[#2A2A2A]">
+              <h2
+                id="yape-modal-title"
+                className="text-lg font-bold text-white tracking-tight"
+              >
+                Pago por Yape
+              </h2>
+              <button
+                type="button"
+                onClick={() => setIsYapeModalOpen(false)}
+                aria-label="Cerrar ventana"
+                data-testid="close-yape-modal-btn"
+                className="w-9 h-9 rounded-xl bg-transparent hover:bg-white/10 border border-[#2A2A2A] hover:border-white text-white inline-flex items-center justify-center transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              {/* Precio del proyecto */}
+              <div className="bg-[#0A0A0A] border border-[#2A2A2A] rounded-xl p-4 flex items-center justify-between">
+                <span className="text-xs font-medium text-neutral-400">
+                  Monto a pagar
+                </span>
+                <span
+                  className="font-mono tabular-nums text-lg font-bold text-white"
+                  data-testid="yape-modal-price"
+                >
+                  {formatPrice(project.price, project.currency)}
+                </span>
+              </div>
+
+              {/* Número de Yape: 915 978 491 + botón Copiar número */}
+              <div className="bg-[#0A0A0A] border border-[#2A2A2A] rounded-xl p-4 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <span className="block text-xs text-neutral-400">
+                      Número de Yape
+                    </span>
+                    <span
+                      className="font-mono tabular-nums text-xl font-bold text-white tracking-wider mt-0.5 block"
+                      data-testid="yape-phone-display"
+                    >
+                      {YAPE_NUMBER_DISPLAY}
+                    </span>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleCopyYapeNumber}
+                    data-testid="copy-yape-number-btn"
+                    className="min-h-[42px] px-4 py-2 rounded-xl bg-white hover:bg-neutral-200 text-black font-semibold text-xs sm:text-sm inline-flex items-center gap-2 transition-colors cursor-pointer shrink-0"
+                  >
+                    {yapeCopied ? (
+                      <>
+                        <Check className="w-4 h-4 shrink-0" />
+                        <span>¡Copiado!</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-4 h-4 shrink-0" />
+                        <span>Copiar número</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Texto exacto solicitado */}
+              <p
+                className="text-sm text-neutral-200 leading-relaxed"
+                data-testid="yape-instructions-text"
+              >
+                Realiza el pago por Yape y envíame la captura. Cuando lo confirme, se habilitará la descarga.
+              </p>
+
+              {/* Enlace pequeño y secundario "Enviar captura por WhatsApp" */}
+              <div className="pt-1 flex items-center justify-between gap-3">
+                <a
+                  href={yapeWhatsAppUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  data-testid="yape-whatsapp-link"
+                  className="text-xs text-neutral-300 hover:text-white underline inline-flex items-center gap-1.5 transition-colors"
+                >
+                  <span>Enviar captura por WhatsApp</span>
+                  <ExternalLink className="w-3.5 h-3.5" />
+                </a>
+
+                <button
+                  type="button"
+                  onClick={() => setIsYapeModalOpen(false)}
+                  className="min-h-[40px] px-4 py-2 rounded-xl bg-transparent hover:bg-white/10 border border-white text-white text-xs font-semibold transition-colors cursor-pointer"
+                >
+                  Cerrar
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

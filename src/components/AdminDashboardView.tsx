@@ -8,6 +8,7 @@ import {
   CheckCircle2,
   Circle,
   Lock,
+  Unlock,
   LogOut,
   Save,
   Film,
@@ -30,6 +31,7 @@ import {
   formatVideoTimestamp,
   sortCommentsByTime,
   getStatusVisuals,
+  getAdminDeliveryBadge,
   parseVideoUrl,
 } from '../utils/video';
 import {
@@ -48,6 +50,7 @@ interface AdminDashboardViewProps {
   onSignOut: () => Promise<void>;
   projects: Project[];
   selectedProjectId: string | null;
+  selectedProjectFinalVideoUrl: string;
   onSelectProject: (projectId: string) => void;
   commentsForSelected: VideoComment[];
   onCreateProject: (input: ProjectFormInput) => Promise<string>;
@@ -60,6 +63,8 @@ const DEFAULT_FORM_INPUT: ProjectFormInput = {
   title: '',
   clientName: '',
   videoUrl: '',
+  finalVideoUrl: '',
+  descargaHabilitada: false,
   price: 0,
   currency: 'S/',
   showPrice: true,
@@ -78,6 +83,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   onSignOut,
   projects,
   selectedProjectId,
+  selectedProjectFinalVideoUrl,
   onSelectProject,
   commentsForSelected,
   onCreateProject,
@@ -98,6 +104,9 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
 
+  // Payment confirmation dialog when turning on "Habilitar descarga"
+  const [showConfirmPaymentModal, setShowConfirmPaymentModal] = useState<boolean>(false);
+
   // Track which project ID was last loaded into the form so we don't wipe form/messages on re-renders
   const loadedProjectIdRef = useRef<string | null>(null);
 
@@ -108,6 +117,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
         setFormState(DEFAULT_FORM_INPUT);
         setFormError(null);
         setSaveSuccess(null);
+        setShowConfirmPaymentModal(false);
       }
       return;
     }
@@ -119,6 +129,8 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
           title: selectedProject.title,
           clientName: selectedProject.clientName,
           videoUrl: selectedProject.videoUrl,
+          finalVideoUrl: selectedProjectFinalVideoUrl || '',
+          descargaHabilitada: Boolean(selectedProject.descargaHabilitada),
           price: selectedProject.price,
           currency: selectedProject.currency,
           showPrice: selectedProject.showPrice,
@@ -128,12 +140,35 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
           whatsappNumber: selectedProject.whatsappNumber,
         });
         setConfirmDeleteId(null);
+        setShowConfirmPaymentModal(false);
       }
     } else if (loadedProjectIdRef.current !== null) {
       loadedProjectIdRef.current = null;
       setFormState(DEFAULT_FORM_INPUT);
+      setShowConfirmPaymentModal(false);
     }
-  }, [selectedProject, isCreatingNew]);
+  }, [selectedProject, isCreatingNew, selectedProjectFinalVideoUrl]);
+
+  // Sync finalVideoUrl from entregas/{projectId} listener when it arrives for the selected project
+  useEffect(() => {
+    if (!isCreatingNew && selectedProject && loadedProjectIdRef.current === selectedProject.id) {
+      setFormState((prev) => ({
+        ...prev,
+        finalVideoUrl: selectedProjectFinalVideoUrl,
+      }));
+    }
+  }, [selectedProjectFinalVideoUrl, isCreatingNew, selectedProject]);
+
+  // Also keep status & descargaHabilitada synced if client approves in real-time
+  useEffect(() => {
+    if (!isCreatingNew && selectedProject && loadedProjectIdRef.current === selectedProject.id) {
+      setFormState((prev) => ({
+        ...prev,
+        status: selectedProject.status,
+        descargaHabilitada: Boolean(selectedProject.descargaHabilitada),
+      }));
+    }
+  }, [selectedProject?.status, selectedProject?.descargaHabilitada, isCreatingNew, selectedProject]);
 
   const getClientShareUrl = (projectId: string) => {
     return `${window.location.origin}/ver/${encodeURIComponent(projectId)}`;
@@ -150,6 +185,28 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
     window.setTimeout(() => setCopiedId(null), 2500);
   };
 
+  const handleToggleDownloadClick = () => {
+    if (!formState.descargaHabilitada) {
+      // Turning ON requires confirmation: "¿Confirmas que recibiste el pago?"
+      setShowConfirmPaymentModal(true);
+    } else {
+      // Turning OFF locks download immediately
+      setFormState((prev) => ({
+        ...prev,
+        descargaHabilitada: false,
+      }));
+    }
+  };
+
+  const handleConfirmPaymentReceived = () => {
+    setFormState((prev) => ({
+      ...prev,
+      descargaHabilitada: true,
+      status: 'Aprobado',
+    }));
+    setShowConfirmPaymentModal(false);
+  };
+
   const handleFormSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError(null);
@@ -163,6 +220,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
     const trimmedTitle = formState.title.trim();
     const trimmedClient = formState.clientName.trim();
     const trimmedUrl = formState.videoUrl.trim();
+    const trimmedFinalUrl = formState.finalVideoUrl.trim();
     const trimmedWatermark = formState.watermarkText.trim();
     const trimmedWa = formState.whatsappNumber.trim();
 
@@ -179,6 +237,13 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
       setFormError(parsedVideo.reason);
       return;
     }
+    if (trimmedFinalUrl) {
+      const parsedFinal = parseVideoUrl(trimmedFinalUrl);
+      if (parsedFinal.type === 'invalid') {
+        setFormError(`Enlace del video FINAL: ${parsedFinal.reason}`);
+        return;
+      }
+    }
     if (Number.isNaN(formState.price) || formState.price < 0) {
       setFormError('Ingresa un precio válido mayor o igual a 0.');
       return;
@@ -188,6 +253,8 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
       title: trimmedTitle,
       clientName: trimmedClient,
       videoUrl: trimmedUrl,
+      finalVideoUrl: trimmedFinalUrl,
+      descargaHabilitada: Boolean(formState.descargaHabilitada),
       price: Number(formState.price),
       currency: formState.currency,
       showPrice: formState.showPrice,
@@ -391,6 +458,11 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
               {projects.map((proj) => {
                 const isSelected = !isCreatingNew && selectedProject?.id === proj.id;
                 const st = getStatusVisuals(proj.status);
+                const deliveryBadge = getAdminDeliveryBadge(
+                  proj.status,
+                  Boolean(proj.descargaHabilitada)
+                );
+
                 return (
                   <div
                     key={proj.id}
@@ -419,14 +491,30 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                         </span>
                       </div>
 
-                      <div className="flex items-center justify-between gap-2 text-xs text-neutral-400">
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-neutral-400">
                         <span className="truncate">{proj.clientName}</span>
-                        <span className={`inline-flex items-center gap-1 text-[11px] shrink-0 ${st.listTextClass}`}>
-                          {proj.status === 'Aprobado' && <CheckCircle2 className="w-3 h-3" />}
-                          {proj.status === 'Cambios solicitados' && <AlertCircle className="w-3 h-3" />}
-                          {proj.status === 'En revisión' && <Clock className="w-3 h-3" />}
-                          <span>{proj.status}</span>
-                        </span>
+                        <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                          <span className={`inline-flex items-center gap-1 text-[11px] ${st.listTextClass}`}>
+                            {proj.status === 'Aprobado' && <CheckCircle2 className="w-3 h-3" />}
+                            {proj.status === 'Cambios solicitados' && <AlertCircle className="w-3 h-3" />}
+                            {proj.status === 'En revisión' && <Clock className="w-3 h-3" />}
+                            <span>{proj.status}</span>
+                          </span>
+
+                          {deliveryBadge && (
+                            <span
+                              className={`inline-flex items-center gap-1 text-[11px] ${deliveryBadge.badgeClass}`}
+                              data-testid={`project-delivery-badge-${proj.id}`}
+                            >
+                              {proj.descargaHabilitada ? (
+                                <Unlock className="w-3 h-3" />
+                              ) : (
+                                <Lock className="w-3 h-3" />
+                              )}
+                              <span>{deliveryBadge.label}</span>
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </button>
 
@@ -574,9 +662,113 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                       videoUrl: e.target.value,
                     }))
                   }
-                  placeholder="https://.../video.mp4"
+                  placeholder="https://.../video-borrador.mp4"
                   className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-[#0A0A0A] border border-[#2A2A2A] text-sm text-white font-mono placeholder-neutral-500 focus:outline-none focus:border-white"
                 />
+              </div>
+
+              {/* Enlace del video FINAL (sin marca de agua) — guardado en colección separada entregas/{projectId} */}
+              <div className="bg-[#0A0A0A] border border-[#2A2A2A] rounded-xl p-4 space-y-4">
+                <div>
+                  <label
+                    htmlFor="proj-final-video-url"
+                    className="block text-xs font-medium text-white mb-1.5"
+                  >
+                    Enlace del video FINAL (sin marca de agua)
+                  </label>
+                  <input
+                    id="proj-final-video-url"
+                    type="url"
+                    maxLength={500}
+                    value={formState.finalVideoUrl}
+                    onChange={(e) =>
+                      setFormState((prev) => ({
+                        ...prev,
+                        finalVideoUrl: e.target.value,
+                      }))
+                    }
+                    placeholder="https://.../video-final-limpio.mp4"
+                    className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-[#111111] border border-[#2A2A2A] text-sm text-white font-mono placeholder-neutral-500 focus:outline-none focus:border-white"
+                  />
+                  <p className="text-[11px] text-neutral-400 mt-1">
+                    Se guarda de forma protegida en la colección &ldquo;entregas&rdquo; y el cliente solo puede acceder cuando habilites la descarga.
+                  </p>
+                </div>
+
+                {/* Interruptor "Habilitar descarga" */}
+                <div className="flex items-center justify-between gap-3 pt-2 border-t border-[#2A2A2A]">
+                  <div className="space-y-0.5">
+                    <span className="text-xs font-semibold text-white flex items-center gap-1.5">
+                      {formState.descargaHabilitada ? (
+                        <Unlock className="w-4 h-4 text-white" />
+                      ) : (
+                        <Lock className="w-4 h-4 text-neutral-400" />
+                      )}
+                      <span>Habilitar descarga</span>
+                    </span>
+                    <p className="text-xs text-neutral-400">
+                      {formState.descargaHabilitada
+                        ? 'Descarga habilitada para el cliente (Estado: Entregado)'
+                        : 'Descarga bloqueada hasta confirmar el pago por Yape'}
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={formState.descargaHabilitada}
+                    data-testid="toggle-download-switch"
+                    onClick={handleToggleDownloadClick}
+                    className={`relative inline-flex h-7 w-12 shrink-0 cursor-pointer rounded-full border transition-colors duration-200 ease-in-out ${
+                      formState.descargaHabilitada
+                        ? 'bg-white border-white'
+                        : 'bg-[#111111] border-[#2A2A2A]'
+                    }`}
+                  >
+                    <span
+                      className={`pointer-events-none inline-block h-5 w-5 transform rounded-full transition duration-200 ease-in-out mt-0.5 ${
+                        formState.descargaHabilitada
+                          ? 'translate-x-5 bg-black'
+                          : 'translate-x-0.5 bg-neutral-400'
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                {/* Confirmación al encender "Habilitar descarga" */}
+                {showConfirmPaymentModal && (
+                  <div
+                    className="p-4 rounded-xl bg-[#111111] border border-white space-y-3"
+                    role="alertdialog"
+                    aria-labelledby="confirm-payment-question"
+                    data-testid="confirm-payment-dialog"
+                  >
+                    <p
+                      id="confirm-payment-question"
+                      className="text-sm font-semibold text-white"
+                    >
+                      ¿Confirmas que recibiste el pago?
+                    </p>
+                    <div className="flex items-center gap-2.5">
+                      <button
+                        type="button"
+                        data-testid="confirm-payment-yes-btn"
+                        onClick={handleConfirmPaymentReceived}
+                        className="min-h-[38px] px-4 py-1.5 rounded-xl bg-white hover:bg-neutral-200 text-black text-xs font-semibold cursor-pointer"
+                      >
+                        Sí, habilitar descarga
+                      </button>
+                      <button
+                        type="button"
+                        data-testid="confirm-payment-cancel-btn"
+                        onClick={() => setShowConfirmPaymentModal(false)}
+                        className="min-h-[38px] px-4 py-1.5 rounded-xl bg-transparent hover:bg-white/10 border border-white text-white text-xs font-medium cursor-pointer"
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -707,52 +899,27 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                 </label>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label
-                    htmlFor="proj-watermark-text"
-                    className="block text-xs font-medium text-neutral-300 mb-1.5"
-                  >
-                    Texto de la marca de agua
-                  </label>
-                  <input
-                    id="proj-watermark-text"
-                    type="text"
-                    maxLength={100}
-                    value={formState.watermarkText}
-                    onChange={(e) =>
-                      setFormState((prev) => ({
-                        ...prev,
-                        watermarkText: e.target.value,
-                      }))
-                    }
-                    placeholder="Ej. VISTA PREVIA"
-                    className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-[#0A0A0A] border border-[#2A2A2A] text-sm text-white placeholder-neutral-500 focus:outline-none focus:border-white"
-                  />
-                </div>
-
-                <div>
-                  <label
-                    htmlFor="proj-whatsapp"
-                    className="block text-xs font-medium text-neutral-300 mb-1.5"
-                  >
-                    WhatsApp para botón de pago / entrega (con código de país)
-                  </label>
-                  <input
-                    id="proj-whatsapp"
-                    type="text"
-                    maxLength={30}
-                    value={formState.whatsappNumber}
-                    onChange={(e) =>
-                      setFormState((prev) => ({
-                        ...prev,
-                        whatsappNumber: e.target.value,
-                      }))
-                    }
-                    placeholder="Ej. 51987654321"
-                    className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-[#0A0A0A] border border-[#2A2A2A] text-sm text-white font-mono tabular-nums placeholder-neutral-500 focus:outline-none focus:border-white"
-                  />
-                </div>
+              <div>
+                <label
+                  htmlFor="proj-watermark-text"
+                  className="block text-xs font-medium text-neutral-300 mb-1.5"
+                >
+                  Texto de la marca de agua
+                </label>
+                <input
+                  id="proj-watermark-text"
+                  type="text"
+                  maxLength={100}
+                  value={formState.watermarkText}
+                  onChange={(e) =>
+                    setFormState((prev) => ({
+                      ...prev,
+                      watermarkText: e.target.value,
+                    }))
+                  }
+                  placeholder="Ej. VISTA PREVIA"
+                  className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-[#0A0A0A] border border-[#2A2A2A] text-sm text-white placeholder-neutral-500 focus:outline-none focus:border-white"
+                />
               </div>
 
               {formError && (

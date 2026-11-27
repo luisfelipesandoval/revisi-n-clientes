@@ -1,5 +1,45 @@
 {
   "entities": {
+    "Cliente": {
+      "title": "Cliente",
+      "description": "Un cliente guardado con ID largo y aleatorio, nota opcional y un resumen de sus proyectos visibles para evitar consultas abiertas sobre toda la colección de proyectos.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Nombre del cliente",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "note": {
+          "type": "string",
+          "description": "Nota opcional sobre el cliente",
+          "minLength": 0,
+          "maxLength": 500
+        },
+        "visibleProjects": {
+          "type": "array",
+          "description": "Resumen de los proyectos visibles de este cliente (id, title, status, price si es visible, currency, showPrice)"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Fecha de creación del cliente"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Fecha de última actualización del cliente"
+        }
+      },
+      "required": [
+        "name",
+        "note",
+        "visibleProjects",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
     "Project": {
       "title": "Project",
       "description": "Un proyecto de revisión de video compartido con un cliente mediante enlace único (solo contiene el video de vista previa).",
@@ -16,6 +56,16 @@
           "description": "Nombre del cliente asignado al proyecto",
           "minLength": 1,
           "maxLength": 100
+        },
+        "clientId": {
+          "type": "string",
+          "description": "ID del documento en la colección clientes vinculado a este proyecto",
+          "minLength": 0,
+          "maxLength": 128
+        },
+        "mostrarEnListaCliente": {
+          "type": "boolean",
+          "description": "Indica si este proyecto aparece en la lista de más proyectos del cliente"
         },
         "videoUrl": {
           "type": "string",
@@ -160,6 +210,12 @@
     }
   },
   "firestore": {
+    "/clientes/{clienteId}": {
+      "schema": {
+        "$ref": "#/entities/Cliente"
+      },
+      "description": "Colección de clientes guardados con resumen de sus proyectos visibles. Lectura individual pública por ID exacto (get); listado, creación, edición y eliminación exclusivos del administrador."
+    },
     "/projects/{projectId}": {
       "schema": {
         "$ref": "#/entities/Project"

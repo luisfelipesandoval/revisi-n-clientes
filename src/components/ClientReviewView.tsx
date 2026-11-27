@@ -14,8 +14,14 @@ import {
   X,
   CreditCard,
   ExternalLink,
+  ArrowRight,
 } from 'lucide-react';
-import { Project, ProjectStatus, VideoComment } from '../types';
+import {
+  Project,
+  ProjectStatus,
+  VideoComment,
+  VisibleProjectSummary,
+} from '../types';
 import {
   formatPrice,
   formatVideoTimestamp,
@@ -35,6 +41,7 @@ import { VideoPlayer, VideoPlayerHandle } from './VideoPlayer';
 interface ClientReviewViewProps {
   project: Project;
   comments: VideoComment[];
+  otherClientProjects?: VisibleProjectSummary[];
   /**
    * Only populated when project.descargaHabilitada === true.
    * While descargaHabilitada is false, this is strictly null and never loaded from Firestore.
@@ -52,6 +59,7 @@ interface ClientReviewViewProps {
 export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
   project,
   comments,
+  otherClientProjects = [],
   finalVideoUrl,
   firestoreError,
   onUpdateStatus,
@@ -663,6 +671,81 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
           </div>
         </aside>
       </div>
+
+      {/* Más proyectos de [nombre del cliente] — excludes currently open project; hidden if empty */}
+      {(() => {
+        const moreProjects = otherClientProjects.filter(
+          (item) => item.id !== project.id
+        );
+        if (moreProjects.length === 0) return null;
+
+        return (
+          <section
+            className="mt-8 bg-[#111111] border border-[#2A2A2A] rounded-2xl p-5 sm:p-6 space-y-4"
+            data-testid="more-client-projects-section"
+          >
+            <div className="flex items-center justify-between gap-2 pb-3 border-b border-[#2A2A2A]">
+              <h2 className="text-base sm:text-lg font-bold text-white">
+                Más proyectos de {project.clientName}
+              </h2>
+              <span className="font-mono tabular-nums text-xs text-neutral-400">
+                {moreProjects.length}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {moreProjects.map((item) => {
+                const st = getStatusVisuals(item.status);
+                return (
+                  <a
+                    key={item.id}
+                    href={`/ver/${encodeURIComponent(item.id)}`}
+                    data-testid={`more-project-card-${item.id}`}
+                    className="bg-[#0A0A0A] border border-[#2A2A2A] hover:border-white rounded-xl p-4 flex flex-col justify-between gap-3 transition-all group"
+                  >
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span
+                          className={`inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded ${st.badgeClass}`}
+                        >
+                          {(item.status === 'Aprobado' ||
+                            item.status === 'Entregado') && (
+                            <CheckCircle2 className="w-3 h-3 shrink-0" />
+                          )}
+                          {item.status === 'Cambios solicitados' && (
+                            <AlertCircle className="w-3 h-3 shrink-0" />
+                          )}
+                          {item.status === 'En revisión' && (
+                            <Clock className="w-3 h-3 shrink-0" />
+                          )}
+                          <span>{item.status}</span>
+                        </span>
+
+                        {item.showPrice && typeof item.price === 'number' && (
+                          <span className="font-mono tabular-nums text-xs font-semibold text-white shrink-0">
+                            {formatPrice(item.price, item.currency)}
+                          </span>
+                        )}
+                      </div>
+
+                      <h3 className="text-sm font-semibold text-white line-clamp-2">
+                        {item.title}
+                      </h3>
+                    </div>
+
+                    <div className="pt-2.5 border-t border-[#2A2A2A] flex items-center justify-end">
+                      <span className="min-h-[34px] px-3.5 py-1 rounded-lg bg-white group-hover:bg-neutral-200 text-black text-xs font-semibold inline-flex items-center gap-1.5 transition-colors">
+                        <span>Ver</span>
+                        <ArrowRight className="w-3.5 h-3.5" />
+                      </span>
+                    </div>
+                  </a>
+                );
+              })}
+            </div>
+          </section>
+        );
+      })()}
 
       {/* Status Confirmation Modal (Monochrome Black & White) */}
       {pendingConfirmAction && !isDownloadEnabled && (() => {

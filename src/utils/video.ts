@@ -1,4 +1,4 @@
-import { VideoComment, ProjectStatus } from '../types';
+import { VideoComment, ProjectStatus, DisplayProjectStatus } from '../types';
 
 export const YAPE_NUMBER_DISPLAY = '915 978 491';
 export const YAPE_NUMBER_RAW = '915978491';
@@ -148,14 +148,20 @@ export function formatPrice(price: number, currency: 'S/' | '$'): string {
  * Returns monochrome visual classes for project statuses:
  * - "En revisión": dotted/dashed border (borde punteado)
  * - "Cambios solicitados": solid white border (borde sólido)
- * - "Aprobado": white background with black text (fondo blanco con texto negro)
+ * - "Aprobado" / "Entregado": white background with black text (fondo blanco con texto negro)
  */
-export function getStatusVisuals(status: ProjectStatus): {
-  label: ProjectStatus;
+export function getStatusVisuals(status: DisplayProjectStatus): {
+  label: DisplayProjectStatus;
   badgeClass: string;
   listTextClass: string;
 } {
   switch (status) {
+    case 'Entregado':
+      return {
+        label: 'Entregado',
+        badgeClass: 'bg-white text-black border border-solid border-white font-semibold',
+        listTextClass: 'bg-white text-black px-2 py-0.5 rounded font-semibold',
+      };
     case 'Aprobado':
       return {
         label: 'Aprobado',

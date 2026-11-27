@@ -1,4 +1,10 @@
-import { ProjectStatus, CurrencyCode } from '../types';
+import {
+  ProjectStatus,
+  CurrencyCode,
+  Cliente,
+  Project,
+  VisibleProjectSummary,
+} from '../types';
 
 export const ADMIN_EMAIL = 'chat.gpt.sandoval@gmail.com';
 
@@ -23,7 +29,7 @@ export function isValidId(id: unknown): id is string {
 
 /**
  * Generates a cryptographically random alphanumeric ID of at least 20 characters (default 28)
- * so client project links (/ver/ID_DEL_PROYECTO) cannot be guessed.
+ * so client project links (/ver/ID_DEL_PROYECTO) and client profile links (/cliente/ID_DEL_CLIENTE) cannot be guessed.
  */
 export function generateSecureProjectId(length = 28): string {
   const safeLength = Math.max(20, Math.min(64, length));
@@ -46,12 +52,14 @@ export function generateSecureProjectId(length = 28): string {
 export type AppRoute =
   | { view: 'admin' }
   | { view: 'client'; projectId: string }
+  | { view: 'client-portal'; clientId: string }
   | { view: 'invalid-client-link' };
 
 /**
- * Parses window.location.pathname into two strictly separated zones:
+ * Parses window.location.pathname into strictly separated zones:
  * - "/" -> Admin zone
- * - "/ver/ID_DEL_PROYECTO" -> Independent public Client page
+ * - "/ver/ID_DEL_PROYECTO" -> Independent public Client project page
+ * - "/cliente/ID_DEL_CLIENTE" -> Independent public Client project list page
  */
 export function parseRoutePath(pathname: string): AppRoute {
   const clean = pathname.trim();
@@ -71,7 +79,138 @@ export function parseRoutePath(pathname: string): AppRoute {
     return { view: 'client', projectId: rawId };
   }
 
+  if (clean.startsWith('/cliente')) {
+    const match = clean.match(/^\/cliente\/([^/]+)\/?$/);
+    if (!match || !match[1]) {
+      return { view: 'invalid-client-link' };
+    }
+    const rawId = decodeURIComponent(match[1]);
+    if (!isValidId(rawId)) {
+      return { view: 'invalid-client-link' };
+    }
+    return { view: 'client-portal', clientId: rawId };
+  }
+
   return { view: 'invalid-client-link' };
+}
+
+/**
+ * Normalizes a client name for accent-insensitive and case-insensitive matching.
+ */
+export function normalizeClientName(name: string): string {
+  return name
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Computes Levenshtein edit distance between two normalized strings to catch near-duplicates.
+ */
+function levenshteinDistance(a: string, b: string): number {
+  if (a === b) return 0;
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+
+  const matrix: number[][] = [];
+  for (let i = 0; i <= b.length; i++) {
+    matrix[i] = [i];
+  }
+  for (let j = 0; j <= a.length; j++) {
+    matrix[0][j] = j;
+  }
+
+  for (let i = 1; i <= b.length; i++) {
+    for (let j = 1; j <= a.length; j++) {
+      if (b.charAt(i - 1) === a.charAt(j - 1)) {
+        matrix[i][j] = matrix[i - 1][j - 1];
+      } else {
+        matrix[i][j] = Math.min(
+          matrix[i - 1][j - 1] + 1,
+          matrix[i][j - 1] + 1,
+          matrix[i - 1][j] + 1
+        );
+      }
+    }
+  }
+  return matrix[b.length][a.length];
+}
+
+/**
+ * Filters saved clients matching the typed query without distinguishing uppercase or accents.
+ */
+export function filterMatchingClients(
+  clients: Cliente[],
+  query: string
+): Cliente[] {
+  const normQuery = normalizeClientName(query);
+  if (!normQuery) return clients;
+  return clients.filter((c) => normalizeClientName(c.name).includes(normQuery));
+}
+
+/**
+ * Detects if a typed client name is identical (ignoring case/accents, e.g., "Dreyzon" vs "dreyzon")
+ * or almost identical (1-char typo for names >= 4 chars) to an already saved client.
+ */
+export function findSimilarExistingClient(
+  clients: Cliente[],
+  inputName: string
+): Cliente | null {
+  const normInput = normalizeClientName(inputName);
+  if (!normInput) return null;
+
+  // 1) Exact normalized match (case/accent insensitive, e.g. "Dreyzon" vs "dreyzon")
+  const exactNorm = clients.find(
+    (c) => normalizeClientName(c.name) === normInput
+  );
+  if (exactNorm) return exactNorm;
+
+  // 2) Near-duplicate (Levenshtein distance === 1 for names >= 4 chars)
+  if (normInput.length >= 4) {
+    const nearMatch = clients.find((c) => {
+      const normCandidate = normalizeClientName(c.name);
+      return (
+        normCandidate.length >= 4 &&
+        levenshteinDistance(normInput, normCandidate) === 1
+      );
+    });
+    if (nearMatch) return nearMatch;
+  }
+
+  return null;
+}
+
+/**
+ * Builds the sanitized visibleProjects summary array stored inside clientes/{clientId}.
+ * Only includes projects with mostrarEnListaCliente !== false.
+ * Never includes finalVideoUrl, and only includes price when showPrice is true.
+ */
+export function buildVisibleProjectsSummary(
+  projects: Project[],
+  clientId: string
+): VisibleProjectSummary[] {
+  const matching = projects
+    .filter(
+      (p) => p.clientId === clientId && p.mostrarEnListaCliente !== false
+    )
+    .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
+    .slice(0, 200);
+
+  return matching.map((p) => {
+    const summary: VisibleProjectSummary = {
+      id: p.id,
+      title: p.title,
+      status: p.descargaHabilitada ? 'Entregado' : p.status,
+      showPrice: Boolean(p.showPrice),
+      currency: p.currency,
+    };
+    if (p.showPrice) {
+      summary.price = p.price;
+    }
+    return summary;
+  });
 }
 
 export function isAuthorizedAdminUser(
@@ -103,6 +242,8 @@ const REQUIRED_PROJECT_KEYS = [
 const ALLOWED_PROJECT_KEYS = new Set([
   ...REQUIRED_PROJECT_KEYS,
   'descargaHabilitada',
+  'clientId',
+  'mostrarEnListaCliente',
 ]);
 
 export function validateProjectPayload(data: Record<string, unknown>): boolean {
@@ -118,6 +259,8 @@ export function validateProjectPayload(data: Record<string, unknown>): boolean {
   const {
     title,
     clientName,
+    clientId,
+    mostrarEnListaCliente,
     videoUrl,
     price,
     currency,
@@ -131,6 +274,8 @@ export function validateProjectPayload(data: Record<string, unknown>): boolean {
 
   if (typeof title !== 'string' || title.length < 1 || title.length > 120) return false;
   if (typeof clientName !== 'string' || clientName.length < 1 || clientName.length > 100) return false;
+  if (clientId !== undefined && (typeof clientId !== 'string' || clientId.length > 128)) return false;
+  if (mostrarEnListaCliente !== undefined && typeof mostrarEnListaCliente !== 'boolean') return false;
   if (typeof videoUrl !== 'string' || videoUrl.length < 1 || videoUrl.length > 500) return false;
   if (typeof price !== 'number' || !Number.isFinite(price) || price < 0 || price > 100000000) return false;
   if (typeof currency !== 'string' || !VALID_CURRENCIES.includes(currency as CurrencyCode)) return false;
@@ -141,6 +286,33 @@ export function validateProjectPayload(data: Record<string, unknown>): boolean {
   if (typeof whatsappNumber !== 'string' || whatsappNumber.length > 30) return false;
   if (descargaHabilitada !== undefined && typeof descargaHabilitada !== 'boolean') return false;
 
+  return true;
+}
+
+const ALLOWED_CLIENTE_KEYS = new Set([
+  'name',
+  'note',
+  'visibleProjects',
+  'createdAt',
+  'updatedAt',
+]);
+
+export function validateClientePayload(data: Record<string, unknown>): boolean {
+  if (!data || typeof data !== 'object') return false;
+  const keys = Object.keys(data);
+  if (keys.length !== ALLOWED_CLIENTE_KEYS.size) return false;
+  for (const k of keys) {
+    if (!ALLOWED_CLIENTE_KEYS.has(k)) return false;
+  }
+
+  const { name, note, visibleProjects } = data;
+  if (typeof name !== 'string' || name.trim().length < 1 || name.length > 100) return false;
+  if (typeof note !== 'string' || note.length > 500) return false;
+  if (!Array.isArray(visibleProjects) || visibleProjects.length > 200) return false;
+  for (const item of visibleProjects) {
+    if (!item || typeof item !== 'object') return false;
+    if ('finalVideoUrl' in item) return false;
+  }
   return true;
 }
 

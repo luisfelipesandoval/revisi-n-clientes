@@ -1,11 +1,33 @@
 export type ProjectStatus = 'En revisión' | 'Cambios solicitados' | 'Aprobado';
 
+export type DisplayProjectStatus = ProjectStatus | 'Entregado';
+
 export type CurrencyCode = 'S/' | '$';
+
+export interface VisibleProjectSummary {
+  id: string;
+  title: string;
+  status: DisplayProjectStatus;
+  showPrice: boolean;
+  price?: number;
+  currency: CurrencyCode;
+}
+
+export interface Cliente {
+  id: string;
+  name: string;
+  note: string;
+  visibleProjects: VisibleProjectSummary[];
+  createdAt: Date;
+  updatedAt: Date;
+}
 
 export interface Project {
   id: string;
   title: string;
   clientName: string;
+  clientId: string;
+  mostrarEnListaCliente: boolean;
   videoUrl: string;
   price: number;
   currency: CurrencyCode;
@@ -38,6 +60,9 @@ export interface VideoComment {
 export interface ProjectFormInput {
   title: string;
   clientName: string;
+  clientId: string;
+  clientNote?: string;
+  mostrarEnListaCliente: boolean;
   videoUrl: string;
   finalVideoUrl: string;
   descargaHabilitada: boolean;

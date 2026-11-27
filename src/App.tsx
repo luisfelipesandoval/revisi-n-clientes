@@ -29,9 +29,11 @@ import {
 import {
   Cliente,
   DisplayProjectStatus,
+  FinalDeliveryFile,
   Project,
   ProjectFormInput,
   ProjectStatus,
+  ProjectType,
   VideoComment,
   VisibleProjectSummary,
 } from './types';
@@ -43,6 +45,7 @@ import {
   normalizeClientName,
   buildVisibleProjectsSummary,
 } from './utils/validation';
+import { formatFinalVideoFilename } from './utils/video';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ClientReviewView } from './components/ClientReviewView';
 import { ClientPortalView } from './components/ClientPortalView';
@@ -60,6 +63,38 @@ function toDate(val: unknown): Date {
     if (!Number.isNaN(d.getTime())) return d;
   }
   return new Date();
+}
+
+function parseFinalFilesArray(
+  raw: unknown,
+  fallbackVideoUrl?: string,
+  fallbackProjectTitle?: string
+): FinalDeliveryFile[] {
+  if (Array.isArray(raw)) {
+    const parsed: FinalDeliveryFile[] = [];
+    for (const item of raw) {
+      if (!item || typeof item !== 'object') continue;
+      const obj = item as Record<string, unknown>;
+      const name = String(obj.name || '').trim();
+      const url = String(obj.url || '').trim();
+      if (!url) continue;
+      parsed.push({
+        name: name || `Archivo final ${parsed.length + 1}`,
+        url,
+      });
+    }
+    if (parsed.length > 0) return parsed;
+  }
+  const cleanFallbackUrl = String(fallbackVideoUrl || '').trim();
+  if (cleanFallbackUrl) {
+    return [
+      {
+        name: formatFinalVideoFilename(fallbackProjectTitle || 'video'),
+        url: cleanFallbackUrl,
+      },
+    ];
+  }
+  return [];
 }
 
 function parseVisibleProjectsArray(raw: unknown): VisibleProjectSummary[] {
@@ -80,12 +115,15 @@ function parseVisibleProjectsArray(raw: unknown): VisibleProjectSummary[] {
         : 'En revisión';
     const showPrice = Boolean(obj.showPrice);
     const currency = obj.currency === '$' ? '$' : 'S/';
+    const projectType: ProjectType =
+      obj.projectType === 'images' ? 'images' : 'video';
     const summary: VisibleProjectSummary = {
       id,
       title,
       status,
       showPrice,
       currency,
+      projectType,
     };
     if (showPrice && typeof obj.price === 'number' && Number.isFinite(obj.price)) {
       summary.price = obj.price;
@@ -113,6 +151,9 @@ export function AppContent() {
   >(null);
   const [adminSelectedFinalVideoUrl, setAdminSelectedFinalVideoUrl] =
     useState<string>('');
+  const [adminSelectedFinalFiles, setAdminSelectedFinalFiles] = useState<
+    FinalDeliveryFile[]
+  >([]);
   const [adminComments, setAdminComments] = useState<VideoComment[]>([]);
   const [adminFirestoreError, setAdminFirestoreError] = useState<string | null>(
     null
@@ -125,6 +166,9 @@ export function AppContent() {
   >([]);
   const [clientFinalVideoUrl, setClientFinalVideoUrl] = useState<string | null>(
     null
+  );
+  const [clientFinalFiles, setClientFinalFiles] = useState<FinalDeliveryFile[]>(
+    []
   );
   const [clientComments, setClientComments] = useState<VideoComment[]>([]);
   const [loadingClientProject, setLoadingClientProject] =
@@ -187,6 +231,16 @@ export function AppContent() {
         setAdminFirestoreError(null);
         const list: Project[] = snap.docs.map((d) => {
           const data = d.data();
+          const projectType: ProjectType =
+            data.projectType === 'images' ? 'images' : 'video';
+          const imageUrls = Array.isArray(data.imageUrls)
+            ? data.imageUrls.map((u: unknown) => String(u || '').trim()).filter(Boolean)
+            : [];
+          const finalFileNames = Array.isArray(data.finalFileNames)
+            ? data.finalFileNames
+                .map((n: unknown) => String(n || '').trim())
+                .filter(Boolean)
+            : [];
           return {
             id: d.id,
             title: String(data.title || ''),
@@ -196,7 +250,10 @@ export function AppContent() {
               data.mostrarEnListaCliente === undefined
                 ? true
                 : Boolean(data.mostrarEnListaCliente),
+            projectType,
             videoUrl: String(data.videoUrl || ''),
+            imageUrls,
+            finalFileNames,
             price: Number(data.price || 0),
             currency: data.currency === '$' ? '$' : 'S/',
             showPrice: Boolean(data.showPrice),
@@ -382,23 +439,36 @@ export function AppContent() {
     adminClientes,
   ]);
 
-  // Listen to entregas/{selectedAdminProjectId} in Admin Zone so Admin can view/edit finalVideoUrl
+  // Listen to entregas/{selectedAdminProjectId} in Admin Zone so Admin can view/edit finalFiles & finalVideoUrl
   useEffect(() => {
     if (!isRealAdmin || !selectedAdminProjectId) {
       setAdminSelectedFinalVideoUrl('');
+      setAdminSelectedFinalFiles([]);
       return;
     }
 
+    const currentProj = adminProjects.find(
+      (p) => p.id === selectedAdminProjectId
+    );
     const entregaPath = `entregas/${selectedAdminProjectId}`;
     const unsub = onSnapshot(
       doc(db, 'entregas', selectedAdminProjectId),
       (snap) => {
         if (!snap.exists()) {
           setAdminSelectedFinalVideoUrl('');
+          setAdminSelectedFinalFiles([]);
           return;
         }
         const data = snap.data();
-        setAdminSelectedFinalVideoUrl(String(data.finalVideoUrl || ''));
+        const rawFinalVideoUrl = String(data.finalVideoUrl || '');
+        setAdminSelectedFinalVideoUrl(rawFinalVideoUrl);
+        setAdminSelectedFinalFiles(
+          parseFinalFilesArray(
+            data.finalFiles,
+            rawFinalVideoUrl,
+            currentProj?.title
+          )
+        );
       },
       (error) => {
         try {
@@ -410,7 +480,7 @@ export function AppContent() {
     );
 
     return () => unsub();
-  }, [isRealAdmin, selectedAdminProjectId]);
+  }, [isRealAdmin, selectedAdminProjectId, adminProjects]);
 
   // Listen to comments for the selected project in Admin Zone
   useEffect(() => {
@@ -434,6 +504,10 @@ export function AppContent() {
             authorName: String(data.authorName || 'Cliente'),
             text: String(data.text || ''),
             videoSecond: Number(data.videoSecond || 0),
+            imageNumber:
+              typeof data.imageNumber === 'number'
+                ? data.imageNumber
+                : undefined,
             createdAt: toDate(data.createdAt),
             resolved: Boolean(data.resolved),
           };
@@ -476,6 +550,16 @@ export function AppContent() {
           return;
         }
         const data = snap.data();
+        const projectType: ProjectType =
+          data.projectType === 'images' ? 'images' : 'video';
+        const imageUrls = Array.isArray(data.imageUrls)
+          ? data.imageUrls.map((u: unknown) => String(u || '').trim()).filter(Boolean)
+          : [];
+        const finalFileNames = Array.isArray(data.finalFileNames)
+          ? data.finalFileNames
+              .map((n: unknown) => String(n || '').trim())
+              .filter(Boolean)
+          : [];
         setClientProject({
           id: snap.id,
           title: String(data.title || ''),
@@ -485,7 +569,10 @@ export function AppContent() {
             data.mostrarEnListaCliente === undefined
               ? true
               : Boolean(data.mostrarEnListaCliente),
+          projectType,
           videoUrl: String(data.videoUrl || ''),
+          imageUrls,
+          finalFileNames,
           price: Number(data.price || 0),
           currency: data.currency === '$' ? '$' : 'S/',
           showPrice: Boolean(data.showPrice),
@@ -527,6 +614,10 @@ export function AppContent() {
             authorName: String(data.authorName || 'Cliente'),
             text: String(data.text || ''),
             videoSecond: Number(data.videoSecond || 0),
+            imageNumber:
+              typeof data.imageNumber === 'number'
+                ? data.imageNumber
+                : undefined,
             createdAt: toDate(data.createdAt),
             resolved: Boolean(data.resolved),
           };
@@ -582,6 +673,7 @@ export function AppContent() {
   useEffect(() => {
     if (route.view !== 'client' || !clientProject || !clientProject.descargaHabilitada) {
       setClientFinalVideoUrl(null);
+      setClientFinalFiles([]);
       return;
     }
 
@@ -591,14 +683,19 @@ export function AppContent() {
       (snap) => {
         if (!snap.exists()) {
           setClientFinalVideoUrl(null);
+          setClientFinalFiles([]);
           return;
         }
         const data = snap.data();
         const url = String(data.finalVideoUrl || '').trim();
         setClientFinalVideoUrl(url || null);
+        setClientFinalFiles(
+          parseFinalFilesArray(data.finalFiles, url, clientProject.title)
+        );
       },
       (error) => {
         setClientFinalVideoUrl(null);
+        setClientFinalFiles([]);
         try {
           handleFirestoreError(error, OperationType.GET, entregaPath);
         } catch (formattedErr) {
@@ -608,7 +705,7 @@ export function AppContent() {
     );
 
     return () => unsubEntrega();
-  }, [route, clientProject?.id, clientProject?.descargaHabilitada]);
+  }, [route, clientProject?.id, clientProject?.descargaHabilitada, clientProject?.title]);
 
   // 3) INDEPENDENT CLIENT PORTAL PAGE ("/cliente/ID_DEL_CLIENTE")
   useEffect(() => {
@@ -675,6 +772,7 @@ export function AppContent() {
     authorName: string;
     text: string;
     videoSecond: number;
+    imageNumber?: number;
   }) => {
     if (route.view !== 'client') return;
     const safeAuthor = payload.authorName.trim().slice(0, 80);
@@ -683,6 +781,11 @@ export function AppContent() {
       0,
       Math.min(86400, Math.floor(payload.videoSecond))
     );
+    const safeImageNumber =
+      typeof payload.imageNumber === 'number' &&
+      Number.isFinite(payload.imageNumber)
+        ? Math.max(1, Math.min(500, Math.floor(payload.imageNumber)))
+        : undefined;
 
     const commentId = generateSecureProjectId(24);
     const path = `comments/${commentId}`;
@@ -692,6 +795,7 @@ export function AppContent() {
         authorName: safeAuthor,
         text: safeText,
         videoSecond: safeSecond,
+        ...(safeImageNumber ? { imageNumber: safeImageNumber } : {}),
         createdAt: serverTimestamp(),
         resolved: false,
       });
@@ -880,12 +984,31 @@ export function AppContent() {
     const newId = generateSecureProjectId(28);
     const path = `projects/${newId}`;
 
+    const projectType: ProjectType =
+      input.projectType === 'images' ? 'images' : 'video';
+    const cleanImageUrls = (input.imageUrls || [])
+      .map((u) => u.trim().slice(0, 500))
+      .filter(Boolean)
+      .slice(0, 200);
+    const cleanFinalFiles: FinalDeliveryFile[] = (input.finalFiles || [])
+      .map((f, idx) => ({
+        name: (f.name.trim() || `Archivo final ${idx + 1}`).slice(0, 140),
+        url: f.url.trim().slice(0, 500),
+      }))
+      .filter((f) => Boolean(f.url))
+      .slice(0, 100);
+    const cleanFinalFileNames = cleanFinalFiles.map((f) => f.name);
+
     const sanitized = {
       title: input.title.trim().slice(0, 120),
       clientName,
       clientId,
       mostrarEnListaCliente: input.mostrarEnListaCliente !== false,
-      videoUrl: input.videoUrl.trim().slice(0, 500),
+      projectType,
+      videoUrl:
+        projectType === 'video' ? input.videoUrl.trim().slice(0, 500) : '',
+      imageUrls: projectType === 'images' ? cleanImageUrls : [],
+      finalFileNames: cleanFinalFileNames,
       price: Math.max(0, Number(input.price) || 0),
       currency: input.currency,
       showPrice: Boolean(input.showPrice),
@@ -896,7 +1019,13 @@ export function AppContent() {
       descargaHabilitada: Boolean(input.descargaHabilitada),
     };
 
-    const sanitizedFinalVideoUrl = input.finalVideoUrl.trim().slice(0, 500);
+    const sanitizedFinalVideoUrl = (
+      cleanFinalFiles[0]?.url ||
+      input.finalVideoUrl ||
+      ''
+    )
+      .trim()
+      .slice(0, 500);
 
     try {
       await setDoc(doc(db, 'projects', newId), {
@@ -907,6 +1036,7 @@ export function AppContent() {
 
       await setDoc(doc(db, 'entregas', newId), {
         finalVideoUrl: sanitizedFinalVideoUrl,
+        finalFiles: cleanFinalFiles,
         updatedAt: serverTimestamp(),
       });
 
@@ -929,6 +1059,7 @@ export function AppContent() {
       setAdminProjects(nextProjects);
       setSelectedAdminProjectId(newId);
       setAdminSelectedFinalVideoUrl(sanitizedFinalVideoUrl);
+      setAdminSelectedFinalFiles(cleanFinalFiles);
       return newId;
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, path);
@@ -948,13 +1079,32 @@ export function AppContent() {
     const { clientId, clientName } =
       await resolveOrCreateClienteForProject(input);
 
+    const projectType: ProjectType =
+      input.projectType === 'images' ? 'images' : 'video';
+    const cleanImageUrls = (input.imageUrls || [])
+      .map((u) => u.trim().slice(0, 500))
+      .filter(Boolean)
+      .slice(0, 200);
+    const cleanFinalFiles: FinalDeliveryFile[] = (input.finalFiles || [])
+      .map((f, idx) => ({
+        name: (f.name.trim() || `Archivo final ${idx + 1}`).slice(0, 140),
+        url: f.url.trim().slice(0, 500),
+      }))
+      .filter((f) => Boolean(f.url))
+      .slice(0, 100);
+    const cleanFinalFileNames = cleanFinalFiles.map((f) => f.name);
+
     const path = `projects/${projectId}`;
     const sanitized = {
       title: input.title.trim().slice(0, 120),
       clientName,
       clientId,
       mostrarEnListaCliente: input.mostrarEnListaCliente !== false,
-      videoUrl: input.videoUrl.trim().slice(0, 500),
+      projectType,
+      videoUrl:
+        projectType === 'video' ? input.videoUrl.trim().slice(0, 500) : '',
+      imageUrls: projectType === 'images' ? cleanImageUrls : [],
+      finalFileNames: cleanFinalFileNames,
       price: Math.max(0, Number(input.price) || 0),
       currency: input.currency,
       showPrice: Boolean(input.showPrice),
@@ -965,7 +1115,13 @@ export function AppContent() {
       descargaHabilitada: Boolean(input.descargaHabilitada),
     };
 
-    const sanitizedFinalVideoUrl = input.finalVideoUrl.trim().slice(0, 500);
+    const sanitizedFinalVideoUrl = (
+      cleanFinalFiles[0]?.url ||
+      input.finalVideoUrl ||
+      ''
+    )
+      .trim()
+      .slice(0, 500);
 
     try {
       await updateDoc(doc(db, 'projects', projectId), {
@@ -975,6 +1131,7 @@ export function AppContent() {
 
       await setDoc(doc(db, 'entregas', projectId), {
         finalVideoUrl: sanitizedFinalVideoUrl,
+        finalFiles: cleanFinalFiles,
         updatedAt: serverTimestamp(),
       });
 
@@ -1157,6 +1314,9 @@ export function AppContent() {
             finalVideoUrl={
               clientProject.descargaHabilitada ? clientFinalVideoUrl : null
             }
+            finalFiles={
+              clientProject.descargaHabilitada ? clientFinalFiles : []
+            }
             firestoreError={clientFirestoreError}
             onUpdateStatus={handleClientUpdateStatus}
             onAddComment={handleClientAddComment}
@@ -1181,6 +1341,7 @@ export function AppContent() {
           clientes={adminClientes}
           selectedProjectId={selectedAdminProjectId}
           selectedProjectFinalVideoUrl={adminSelectedFinalVideoUrl}
+          selectedProjectFinalFiles={adminSelectedFinalFiles}
           onSelectProject={(id) => setSelectedAdminProjectId(id)}
           commentsForSelected={adminComments}
           onCreateProject={handleAdminCreateProject}

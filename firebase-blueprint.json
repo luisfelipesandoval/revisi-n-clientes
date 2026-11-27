@@ -19,7 +19,7 @@
         },
         "visibleProjects": {
           "type": "array",
-          "description": "Resumen de los proyectos visibles de este cliente (id, title, status, price si es visible, currency, showPrice)"
+          "description": "Resumen de los proyectos visibles de este cliente (id, title, projectType, status, price si es visible, currency, showPrice)"
         },
         "createdAt": {
           "type": "string",
@@ -42,12 +42,12 @@
     },
     "Project": {
       "title": "Project",
-      "description": "Un proyecto de revisión de video compartido con un cliente mediante enlace único (solo contiene el video de vista previa).",
+      "description": "Un proyecto de revisión (Video o Imágenes) compartido con un cliente mediante enlace único (solo contiene archivos de vista previa y nombres visibles de archivos finales, nunca enlaces de entrega final).",
       "type": "object",
       "properties": {
         "title": {
           "type": "string",
-          "description": "Título del proyecto de video",
+          "description": "Título del proyecto",
           "minLength": 1,
           "maxLength": 120
         },
@@ -63,15 +63,30 @@
           "minLength": 0,
           "maxLength": 128
         },
+        "projectType": {
+          "type": "string",
+          "description": "Tipo de proyecto: video o imágenes",
+          "enum": ["video", "images"],
+          "minLength": 1,
+          "maxLength": 20
+        },
         "mostrarEnListaCliente": {
           "type": "boolean",
           "description": "Indica si este proyecto aparece en la lista de más proyectos del cliente"
         },
         "videoUrl": {
           "type": "string",
-          "description": "Enlace directo .mp4 del video de vista previa",
-          "minLength": 1,
+          "description": "Enlace directo .mp4 del video de vista previa (para proyectos tipo video)",
+          "minLength": 0,
           "maxLength": 500
+        },
+        "imageUrls": {
+          "type": "array",
+          "description": "Lista ordenada de enlaces de imágenes JPG/PNG de vista previa (para proyectos tipo imágenes)"
+        },
+        "finalFileNames": {
+          "type": "array",
+          "description": "Lista de nombres visibles de los archivos finales (sin enlaces) para mostrarlos con candado mientras la descarga esté bloqueada"
         },
         "price": {
           "type": "number",
@@ -90,7 +105,7 @@
         },
         "watermarkEnabled": {
           "type": "boolean",
-          "description": "Indica si la marca de agua semitransparente está activa sobre el video"
+          "description": "Indica si la marca de agua semitransparente está activa"
         },
         "watermarkText": {
           "type": "string",
@@ -113,7 +128,7 @@
         },
         "descargaHabilitada": {
           "type": "boolean",
-          "description": "Indica si el administrador confirmó el pago y habilitó la descarga del video final"
+          "description": "Indica si el administrador confirmó el pago y habilitó la descarga de los archivos finales"
         },
         "createdAt": {
           "type": "string",
@@ -144,14 +159,18 @@
     },
     "Entrega": {
       "title": "Entrega",
-      "description": "Documento aislado con el enlace del video final sin marca de agua, legible por el cliente únicamente cuando descargaHabilitada es true en el proyecto.",
+      "description": "Documento aislado con los archivos finales y sus enlaces reales sin marca de agua, legible por el cliente únicamente cuando descargaHabilitada es true en el proyecto.",
       "type": "object",
       "properties": {
         "finalVideoUrl": {
           "type": "string",
-          "description": "Enlace directo .mp4 del video final sin marca de agua",
+          "description": "Enlace principal del archivo/video final (compatibilidad)",
           "minLength": 0,
           "maxLength": 500
+        },
+        "finalFiles": {
+          "type": "array",
+          "description": "Lista de archivos finales con nombre visible (name) y enlace de descarga o Google Drive (url)"
         },
         "updatedAt": {
           "type": "string",
@@ -163,7 +182,7 @@
     },
     "Comment": {
       "title": "Comment",
-      "description": "Comentario de revisión en un segundo exacto del video.",
+      "description": "Comentario de revisión en un segundo exacto del video o en un número de imagen.",
       "type": "object",
       "properties": {
         "projectId": {
@@ -188,6 +207,10 @@
         "videoSecond": {
           "type": "number",
           "description": "Segundo exacto del video donde se dejó el comentario"
+        },
+        "imageNumber": {
+          "type": "number",
+          "description": "Número de imagen (1-based) donde se dejó el comentario en proyectos tipo imágenes"
         },
         "createdAt": {
           "type": "string",
@@ -220,19 +243,19 @@
       "schema": {
         "$ref": "#/entities/Project"
       },
-      "description": "Colección de proyectos de video (vista previa). Lectura individual pública por ID; listado, creación, edición completa y eliminación restringidos al administrador; actualización de estado permitida al cliente solo mientras descargaHabilitada sea false."
+      "description": "Colección de proyectos (video o imágenes de vista previa). Lectura individual pública por ID; listado, creación, edición completa y eliminación restringidos al administrador; actualización de estado permitida al cliente solo mientras descargaHabilitada sea false."
     },
     "/entregas/{projectId}": {
       "schema": {
         "$ref": "#/entities/Entrega"
       },
-      "description": "Colección aislada con el enlace del video final sin marca de agua. Lectura permitida al cliente solo si projects/{projectId} tiene descargaHabilitada == true. Escritura exclusiva del administrador."
+      "description": "Colección aislada con los enlaces reales de los archivos finales sin marca de agua. Lectura permitida al cliente solo si projects/{projectId} tiene descargaHabilitada == true. Escritura exclusiva del administrador."
     },
     "/comments/{commentId}": {
       "schema": {
         "$ref": "#/entities/Comment"
       },
-      "description": "Colección de comentarios por proyecto. Lectura y creación permitidas con el enlace del proyecto; marcar como resuelto y eliminar restringidos al administrador."
+      "description": "Colección de comentarios por proyecto (por segundo de video o por número de imagen). Lectura y creación permitidas con el enlace del proyecto; marcar como resuelto y eliminar restringidos al administrador."
     }
   }
 }

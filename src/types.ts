@@ -2,11 +2,19 @@ export type ProjectStatus = 'En revisión' | 'Cambios solicitados' | 'Aprobado';
 
 export type DisplayProjectStatus = ProjectStatus | 'Entregado';
 
+export type ProjectType = 'video' | 'images';
+
 export type CurrencyCode = 'S/' | '$';
+
+export interface FinalDeliveryFile {
+  name: string;
+  url: string;
+}
 
 export interface VisibleProjectSummary {
   id: string;
   title: string;
+  projectType?: ProjectType;
   status: DisplayProjectStatus;
   showPrice: boolean;
   price?: number;
@@ -27,8 +35,11 @@ export interface Project {
   title: string;
   clientName: string;
   clientId: string;
+  projectType: ProjectType;
   mostrarEnListaCliente: boolean;
   videoUrl: string;
+  imageUrls: string[];
+  finalFileNames: string[];
   price: number;
   currency: CurrencyCode;
   showPrice: boolean;
@@ -44,6 +55,7 @@ export interface Project {
 export interface ProjectEntrega {
   projectId: string;
   finalVideoUrl: string;
+  finalFiles: FinalDeliveryFile[];
   updatedAt: Date;
 }
 
@@ -53,6 +65,7 @@ export interface VideoComment {
   authorName: string;
   text: string;
   videoSecond: number;
+  imageNumber?: number;
   createdAt: Date;
   resolved: boolean;
 }
@@ -62,9 +75,12 @@ export interface ProjectFormInput {
   clientName: string;
   clientId: string;
   clientNote?: string;
+  projectType: ProjectType;
   mostrarEnListaCliente: boolean;
   videoUrl: string;
+  imageUrls: string[];
   finalVideoUrl: string;
+  finalFiles: FinalDeliveryFile[];
   descargaHabilitada: boolean;
   price: number;
   currency: CurrencyCode;

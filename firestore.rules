@@ -72,8 +72,11 @@ service cloud.firestore {
           'title',
           'clientName',
           'clientId',
+          'projectType',
           'mostrarEnListaCliente',
           'videoUrl',
+          'imageUrls',
+          'finalFileNames',
           'price',
           'currency',
           'showPrice',
@@ -88,8 +91,11 @@ service cloud.firestore {
         data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
         data.clientName is string && data.clientName.size() >= 1 && data.clientName.size() <= 100 &&
         (!('clientId' in data) || (data.clientId is string && data.clientId.size() >= 0 && data.clientId.size() <= 128)) &&
+        (!('projectType' in data) || (data.projectType is string && data.projectType.size() >= 1 && data.projectType.size() <= 20 && data.projectType in ['video', 'images'])) &&
         (!('mostrarEnListaCliente' in data) || data.mostrarEnListaCliente is bool) &&
-        data.videoUrl is string && data.videoUrl.size() >= 1 && data.videoUrl.size() <= 500 &&
+        data.videoUrl is string && data.videoUrl.size() >= 0 && data.videoUrl.size() <= 500 &&
+        (!('imageUrls' in data) || (data.imageUrls is list && data.imageUrls.size() <= 100 && (data.imageUrls.size() == 0 || (data.imageUrls[0] is string && data.imageUrls[0].size() <= 500)))) &&
+        (!('finalFileNames' in data) || (data.finalFileNames is list && data.finalFileNames.size() <= 100 && (data.finalFileNames.size() == 0 || (data.finalFileNames[0] is string && data.finalFileNames[0].size() <= 200)))) &&
         (data.price is int || data.price is float) && data.price >= 0 && data.price <= 100000000 &&
         data.currency is string && data.currency.size() >= 1 && data.currency.size() <= 5 &&
         data.currency in ['S/', '$'] &&
@@ -111,9 +117,11 @@ service cloud.firestore {
         ]) &&
         data.keys().hasOnly([
           'finalVideoUrl',
+          'finalFiles',
           'updatedAt'
         ]) &&
         data.finalVideoUrl is string && data.finalVideoUrl.size() >= 0 && data.finalVideoUrl.size() <= 500 &&
+        (!('finalFiles' in data) || (data.finalFiles is list && data.finalFiles.size() <= 100 && (data.finalFiles.size() == 0 || data.finalFiles[0] is map))) &&
         data.updatedAt is timestamp;
     }
 
@@ -131,6 +139,7 @@ service cloud.firestore {
           'authorName',
           'text',
           'videoSecond',
+          'imageNumber',
           'createdAt',
           'resolved'
         ]) &&
@@ -138,6 +147,7 @@ service cloud.firestore {
         data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 80 &&
         data.text is string && data.text.size() >= 1 && data.text.size() <= 1000 &&
         (data.videoSecond is int || data.videoSecond is float) && data.videoSecond >= 0 && data.videoSecond <= 86400 &&
+        (!('imageNumber' in data) || ((data.imageNumber is int || data.imageNumber is float) && data.imageNumber >= 1 && data.imageNumber <= 100)) &&
         data.createdAt is timestamp &&
         data.resolved is bool;
     }
@@ -163,7 +173,7 @@ service cloud.firestore {
       allow delete: if isAdmin() && isValidId(clienteId);
     }
 
-    // Colección projects (solo contiene el video de vista previa)
+    // Colección projects (solo contiene vista previa y nombres de archivos finales sin enlaces)
     match /projects/{projectId} {
       // Cualquiera puede LEER un proyecto solo si conoce su ID exacto
       allow get: if isValidId(projectId);
@@ -193,7 +203,7 @@ service cloud.firestore {
       allow delete: if isAdmin() && isValidId(projectId);
     }
 
-    // Colección entregas (contiene finalVideoUrl sin marca de agua)
+    // Colección entregas (contiene los enlaces reales de los archivos finales sin marca de agua)
     match /entregas/{projectId} {
       // Cualquiera puede leer entregas/ID SOLO si el proyecto projects/ID tiene descargaHabilitada == true (o si es el admin)
       allow get: if isValidId(projectId) && (

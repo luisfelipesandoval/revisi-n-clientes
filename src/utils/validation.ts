@@ -202,6 +202,7 @@ export function buildVisibleProjectsSummary(
     const summary: VisibleProjectSummary = {
       id: p.id,
       title: p.title,
+      projectType: p.projectType === 'images' ? 'images' : 'video',
       status: p.descargaHabilitada ? 'Entregado' : p.status,
       showPrice: Boolean(p.showPrice),
       currency: p.currency,
@@ -243,7 +244,10 @@ const ALLOWED_PROJECT_KEYS = new Set([
   ...REQUIRED_PROJECT_KEYS,
   'descargaHabilitada',
   'clientId',
+  'projectType',
   'mostrarEnListaCliente',
+  'imageUrls',
+  'finalFileNames',
 ]);
 
 export function validateProjectPayload(data: Record<string, unknown>): boolean {
@@ -260,8 +264,11 @@ export function validateProjectPayload(data: Record<string, unknown>): boolean {
     title,
     clientName,
     clientId,
+    projectType,
     mostrarEnListaCliente,
     videoUrl,
+    imageUrls,
+    finalFileNames,
     price,
     currency,
     showPrice,
@@ -275,8 +282,33 @@ export function validateProjectPayload(data: Record<string, unknown>): boolean {
   if (typeof title !== 'string' || title.length < 1 || title.length > 120) return false;
   if (typeof clientName !== 'string' || clientName.length < 1 || clientName.length > 100) return false;
   if (clientId !== undefined && (typeof clientId !== 'string' || clientId.length > 128)) return false;
+  if (
+    projectType !== undefined &&
+    projectType !== 'video' &&
+    projectType !== 'images'
+  ) {
+    return false;
+  }
   if (mostrarEnListaCliente !== undefined && typeof mostrarEnListaCliente !== 'boolean') return false;
-  if (typeof videoUrl !== 'string' || videoUrl.length < 1 || videoUrl.length > 500) return false;
+  if (typeof videoUrl !== 'string' || videoUrl.length > 500) return false;
+  if (
+    imageUrls !== undefined &&
+    (!Array.isArray(imageUrls) || imageUrls.length > 200)
+  ) {
+    return false;
+  }
+  if (
+    projectType === 'images' &&
+    (!Array.isArray(imageUrls) || imageUrls.length === 0)
+  ) {
+    return false;
+  }
+  if (
+    finalFileNames !== undefined &&
+    (!Array.isArray(finalFileNames) || finalFileNames.length > 100)
+  ) {
+    return false;
+  }
   if (typeof price !== 'number' || !Number.isFinite(price) || price < 0 || price > 100000000) return false;
   if (typeof currency !== 'string' || !VALID_CURRENCIES.includes(currency as CurrencyCode)) return false;
   if (typeof showPrice !== 'boolean') return false;
@@ -311,7 +343,7 @@ export function validateClientePayload(data: Record<string, unknown>): boolean {
   if (!Array.isArray(visibleProjects) || visibleProjects.length > 200) return false;
   for (const item of visibleProjects) {
     if (!item || typeof item !== 'object') return false;
-    if ('finalVideoUrl' in item) return false;
+    if ('finalVideoUrl' in item || 'finalFiles' in item) return false;
   }
   return true;
 }
@@ -335,13 +367,18 @@ export function canClientReadEntrega(
   return isAdmin || projectDescargaHabilitada === true;
 }
 
-const ALLOWED_COMMENT_KEYS = new Set([
+const REQUIRED_COMMENT_KEYS = [
   'projectId',
   'authorName',
   'text',
   'videoSecond',
   'createdAt',
   'resolved',
+];
+
+const ALLOWED_COMMENT_KEYS = new Set([
+  ...REQUIRED_COMMENT_KEYS,
+  'imageNumber',
 ]);
 
 export function validateCommentCreatePayload(
@@ -351,16 +388,27 @@ export function validateCommentCreatePayload(
   if (!parentProjectExists) return false;
   if (!data || typeof data !== 'object') return false;
   const keys = Object.keys(data);
-  if (keys.length !== ALLOWED_COMMENT_KEYS.size) return false;
+  for (const reqKey of REQUIRED_COMMENT_KEYS) {
+    if (!(reqKey in data)) return false;
+  }
   for (const k of keys) {
     if (!ALLOWED_COMMENT_KEYS.has(k)) return false;
   }
 
-  const { projectId, authorName, text, videoSecond, resolved } = data;
+  const { projectId, authorName, text, videoSecond, imageNumber, resolved } = data;
   if (!isValidId(projectId)) return false;
   if (typeof authorName !== 'string' || authorName.trim().length < 1 || authorName.length > 80) return false;
   if (typeof text !== 'string' || text.trim().length < 1 || text.length > 1000) return false;
   if (typeof videoSecond !== 'number' || !Number.isFinite(videoSecond) || videoSecond < 0 || videoSecond > 86400) return false;
+  if (
+    imageNumber !== undefined &&
+    (typeof imageNumber !== 'number' ||
+      !Number.isFinite(imageNumber) ||
+      imageNumber < 1 ||
+      imageNumber > 500)
+  ) {
+    return false;
+  }
   if (resolved !== false) return false;
 
   return true;

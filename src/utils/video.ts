@@ -1,4 +1,9 @@
-import { VideoComment, ProjectStatus, DisplayProjectStatus } from '../types';
+import {
+  VideoComment,
+  ProjectStatus,
+  DisplayProjectStatus,
+  ProjectType,
+} from '../types';
 
 export const YAPE_NUMBER_DISPLAY = '915 978 491';
 export const YAPE_NUMBER_RAW = '915978491';
@@ -35,6 +40,58 @@ export function parseVideoUrl(url: string): VideoSourceType {
       type: 'invalid',
       reason: 'Formato de enlace no válido. Ingresa una URL directa a un archivo .mp4.',
     };
+  }
+}
+
+/**
+ * Parses one or more image URLs pasted one per line (JPG, PNG, Cloudinary, etc.).
+ */
+export function parseImageUrlsFromText(text: string): {
+  validUrls: string[];
+  invalidLines: string[];
+} {
+  const lines = text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+
+  const validUrls: string[] = [];
+  const invalidLines: string[] = [];
+
+  for (const line of lines) {
+    try {
+      const parsed = new URL(line);
+      if (
+        (parsed.protocol === 'http:' || parsed.protocol === 'https:') &&
+        line.length <= 500
+      ) {
+        validUrls.push(line);
+      } else {
+        invalidLines.push(line);
+      }
+    } catch {
+      invalidLines.push(line);
+    }
+  }
+
+  return { validUrls, invalidLines };
+}
+
+/**
+ * Checks if a final delivery file URL points to Google Drive.
+ */
+export function isGoogleDriveUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url.trim());
+    const host = parsed.hostname.toLowerCase();
+    return (
+      host === 'drive.google.com' ||
+      host.endsWith('.drive.google.com') ||
+      host === 'docs.google.com' ||
+      host.endsWith('.docs.google.com')
+    );
+  } catch {
+    return false;
   }
 }
 
@@ -83,10 +140,23 @@ export function parseTimestampInput(input: string): number | null {
 }
 
 /**
- * Sorts comments ascending by videoSecond, breaking ties by creation date ascending.
+ * Sorts comments ascending by videoSecond (for video projects) or imageNumber (for images projects),
+ * breaking ties by creation date ascending.
  */
-export function sortCommentsByTime(comments: VideoComment[]): VideoComment[] {
+export function sortCommentsByTime(
+  comments: VideoComment[],
+  projectType: ProjectType = 'video'
+): VideoComment[] {
   return [...comments].sort((a, b) => {
+    if (projectType === 'images') {
+      const imgA = a.imageNumber ?? 1;
+      const imgB = b.imageNumber ?? 1;
+      if (imgA !== imgB) {
+        return imgA - imgB;
+      }
+      return a.createdAt.getTime() - b.createdAt.getTime();
+    }
+
     if (a.videoSecond !== b.videoSecond) {
       return a.videoSecond - b.videoSecond;
     }

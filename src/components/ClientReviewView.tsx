@@ -15,8 +15,11 @@ import {
   CreditCard,
   ExternalLink,
   ArrowRight,
+  Film,
+  Image as ImageIcon,
 } from 'lucide-react';
 import {
+  FinalDeliveryFile,
   Project,
   ProjectStatus,
   VideoComment,
@@ -32,11 +35,13 @@ import {
   getStatusVisuals,
   getStatusConfirmationConfig,
   StatusConfirmationAction,
+  isGoogleDriveUrl,
   YAPE_NUMBER_DISPLAY,
   YAPE_NUMBER_RAW,
 } from '../utils/video';
 import { formatReadableFirestoreError } from '../firebase';
 import { VideoPlayer, VideoPlayerHandle } from './VideoPlayer';
+import { ImageGalleryViewer } from './ImageGalleryViewer';
 
 interface ClientReviewViewProps {
   project: Project;
@@ -44,15 +49,17 @@ interface ClientReviewViewProps {
   otherClientProjects?: VisibleProjectSummary[];
   /**
    * Only populated when project.descargaHabilitada === true.
-   * While descargaHabilitada is false, this is strictly null and never loaded from Firestore.
+   * While descargaHabilitada is false, these are strictly null / empty and never loaded from Firestore.
    */
   finalVideoUrl: string | null;
+  finalFiles?: FinalDeliveryFile[];
   firestoreError?: string | null;
   onUpdateStatus: (newStatus: ProjectStatus) => Promise<void>;
   onAddComment: (payload: {
     authorName: string;
     text: string;
     videoSecond: number;
+    imageNumber?: number;
   }) => Promise<void>;
 }
 
@@ -61,6 +68,7 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
   comments,
   otherClientProjects = [],
   finalVideoUrl,
+  finalFiles = [],
   firestoreError,
   onUpdateStatus,
   onAddComment,
@@ -69,9 +77,16 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
   const commentInputRef = useRef<HTMLTextAreaElement | null>(null);
   const nameInputRef = useRef<HTMLInputElement | null>(null);
 
+  const isImagesProject = project.projectType === 'images';
+  const totalImages = project.imageUrls?.length || 0;
+
   const [liveSecond, setLiveSecond] = useState<number>(0);
   const [capturedSecond, setCapturedSecond] = useState<number | null>(null);
   const [customTimeInput, setCustomTimeInput] = useState<string>('00:00');
+
+  const [currentImageIndex, setCurrentImageIndex] = useState<number>(0);
+  const [capturedImageNumber, setCapturedImageNumber] = useState<number>(1);
+
   const [isComposerOpen, setIsComposerOpen] = useState<boolean>(false);
 
   const [savedClientName, setSavedClientName] = useState<string>('');
@@ -88,20 +103,67 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
     useState<StatusConfirmationAction | null>(null);
   const [isYapeModalOpen, setIsYapeModalOpen] = useState<boolean>(false);
   const [yapeCopied, setYapeCopied] = useState<boolean>(false);
-  const [isDownloading, setIsDownloading] = useState<boolean>(false);
+  const [downloadingFileUrl, setDownloadingFileUrl] = useState<string | null>(
+    null
+  );
 
-  const sortedComments = sortCommentsByTime(comments);
+  const sortedComments = sortCommentsByTime(comments, project.projectType);
   const isDownloadEnabled = Boolean(project.descargaHabilitada);
-  const effectiveStatus: ProjectStatus = isDownloadEnabled ? 'Aprobado' : project.status;
-  const statusVisual = getStatusVisuals(effectiveStatus);
-  const finalFilename = formatFinalVideoFilename(project.title);
+  const effectiveStatus: ProjectStatus = isDownloadEnabled
+    ? 'Aprobado'
+    : project.status;
+  const statusVisual = getStatusVisuals(
+    isDownloadEnabled ? 'Entregado' : effectiveStatus
+  );
+  const defaultVideoFilename = formatFinalVideoFilename(project.title);
   const yapeWhatsAppUrl = buildYapeWhatsAppUrl(project.title);
 
+  // Build locked file names list (no URLs!) when download is locked
+  const lockedFileNames: string[] =
+    project.finalFileNames && project.finalFileNames.length > 0
+      ? project.finalFileNames
+      : [
+          isImagesProject
+            ? `${project.title.trim() || 'Archivos finales'}.zip`
+            : defaultVideoFilename,
+        ];
+
+  // Build unlocked final files list when download is enabled
+  const unlockedFinalFiles: FinalDeliveryFile[] = (() => {
+    if (!isDownloadEnabled) return [];
+    if (finalFiles && finalFiles.length > 0) {
+      return finalFiles.filter((f) => f.url.trim().length > 0);
+    }
+    if (finalVideoUrl && finalVideoUrl.trim().length > 0) {
+      return [
+        {
+          name:
+            project.finalFileNames?.[0] ||
+            (isImagesProject
+              ? `${project.title.trim() || 'Entrega'}`
+              : defaultVideoFilename),
+          url: finalVideoUrl.trim(),
+        },
+      ];
+    }
+    return [];
+  })();
+
   const handleCaptureMoment = () => {
-    const sec = playerRef.current ? playerRef.current.getCurrentSecond() : liveSecond;
-    playerRef.current?.pause();
-    setCapturedSecond(sec);
-    setCustomTimeInput(formatVideoTimestamp(sec));
+    if (isImagesProject) {
+      const imgNum = Math.min(
+        Math.max(1, currentImageIndex + 1),
+        Math.max(1, totalImages)
+      );
+      setCapturedImageNumber(imgNum);
+    } else {
+      const sec = playerRef.current
+        ? playerRef.current.getCurrentSecond()
+        : liveSecond;
+      playerRef.current?.pause();
+      setCapturedSecond(sec);
+      setCustomTimeInput(formatVideoTimestamp(sec));
+    }
     setIsComposerOpen(true);
     setFormError(null);
 
@@ -114,8 +176,17 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
     }, 50);
   };
 
-  const handleSeekToComment = (seconds: number) => {
-    playerRef.current?.seekToSecond(seconds);
+  const handleSeekToComment = (comment: VideoComment) => {
+    if (isImagesProject) {
+      const targetNum = comment.imageNumber ?? 1;
+      const targetIdx = Math.min(
+        Math.max(0, targetNum - 1),
+        Math.max(0, totalImages - 1)
+      );
+      setCurrentImageIndex(targetIdx);
+    } else {
+      playerRef.current?.seekToSecond(comment.videoSecond);
+    }
   };
 
   const handleConfirmStatusAction = async () => {
@@ -158,35 +229,49 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
     window.setTimeout(() => setYapeCopied(false), 2500);
   };
 
-  const handleDownloadFinalVideo = async () => {
-    if (!isDownloadEnabled || !finalVideoUrl || isDownloading) return;
-    setIsDownloading(true);
+  const handleDownloadFile = async (file: FinalDeliveryFile) => {
+    if (!isDownloadEnabled || !file.url || downloadingFileUrl) return;
+
+    // If the link is from Google Drive, open it in a new tab
+    if (isGoogleDriveUrl(file.url)) {
+      const a = document.createElement('a');
+      a.href = file.url;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      return;
+    }
+
+    setDownloadingFileUrl(file.url);
     setFormError(null);
+    const filename = file.name.trim() || defaultVideoFilename;
 
     try {
-      const response = await fetch(finalVideoUrl);
+      const response = await fetch(file.url);
       if (!response.ok) throw new Error('Direct download fallback');
       const blob = await response.blob();
       const blobUrl = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = blobUrl;
-      a.download = finalFilename;
+      a.download = filename;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       window.setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
     } catch {
-      // Fallback if the remote video host blocks fetch via CORS
+      // Fallback if the remote host blocks fetch via CORS
       const a = document.createElement('a');
-      a.href = finalVideoUrl;
-      a.download = finalFilename;
+      a.href = file.url;
+      a.download = filename;
       a.target = '_blank';
       a.rel = 'noopener noreferrer';
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
     } finally {
-      setIsDownloading(false);
+      setDownloadingFileUrl(null);
     }
   };
 
@@ -194,7 +279,9 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
     e.preventDefault();
     setFormError(null);
 
-    const trimmedName = (savedClientName && !isEditingName ? savedClientName : authorNameInput).trim();
+    const trimmedName = (
+      savedClientName && !isEditingName ? savedClientName : authorNameInput
+    ).trim();
     const trimmedText = commentText.trim();
 
     if (!trimmedName) {
@@ -207,7 +294,11 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
       return;
     }
     if (!trimmedText) {
-      setFormError('Escribe el detalle del cambio o comentario en este segundo.');
+      setFormError(
+        isImagesProject
+          ? 'Escribe el detalle del cambio o comentario en esta imagen.'
+          : 'Escribe el detalle del cambio o comentario en este segundo.'
+      );
       commentInputRef.current?.focus();
       return;
     }
@@ -216,18 +307,31 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
       return;
     }
 
-    const parsedSec =
-      parseTimestampInput(customTimeInput) ??
-      capturedSecond ??
-      (playerRef.current ? playerRef.current.getCurrentSecond() : liveSecond);
-
     setIsSubmittingComment(true);
     try {
-      await onAddComment({
-        authorName: trimmedName,
-        text: trimmedText,
-        videoSecond: parsedSec,
-      });
+      if (isImagesProject) {
+        const imgNum = Math.min(
+          Math.max(1, capturedImageNumber || currentImageIndex + 1),
+          Math.max(1, totalImages)
+        );
+        await onAddComment({
+          authorName: trimmedName,
+          text: trimmedText,
+          videoSecond: 0,
+          imageNumber: imgNum,
+        });
+      } else {
+        const parsedSec =
+          parseTimestampInput(customTimeInput) ??
+          capturedSecond ??
+          (playerRef.current ? playerRef.current.getCurrentSecond() : liveSecond);
+
+        await onAddComment({
+          authorName: trimmedName,
+          text: trimmedText,
+          videoSecond: parsedSec,
+        });
+      }
 
       setSavedClientName(trimmedName);
       setAuthorNameInput(trimmedName);
@@ -241,6 +345,11 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
       setIsSubmittingComment(false);
     }
   };
+
+  const currentImageDisplayNumber = Math.min(
+    Math.max(1, currentImageIndex + 1),
+    Math.max(1, totalImages)
+  );
 
   return (
     <div className="w-full max-w-6xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
@@ -259,6 +368,22 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
           <div className="space-y-1.5 min-w-0">
             <div className="flex flex-wrap items-center gap-2 text-xs text-neutral-400">
+              <span
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#0A0A0A] border border-[#2A2A2A] text-neutral-300"
+                data-testid="project-type-badge"
+              >
+                {isImagesProject ? (
+                  <>
+                    <ImageIcon className="w-3.5 h-3.5" />
+                    <span>Imágenes</span>
+                  </>
+                ) : (
+                  <>
+                    <Film className="w-3.5 h-3.5" />
+                    <span>Video</span>
+                  </>
+                )}
+              </span>
               <span>Cliente: {project.clientName}</span>
               {project.showPrice && (
                 <>
@@ -284,13 +409,13 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
               className={`inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-xl text-xs ${statusVisual.badgeClass}`}
               data-testid="project-status-badge"
             >
-              {effectiveStatus === 'Aprobado' && (
+              {(effectiveStatus === 'Aprobado' || isDownloadEnabled) && (
                 <CheckCircle2 className="w-4 h-4 shrink-0" />
               )}
-              {effectiveStatus === 'Cambios solicitados' && (
+              {!isDownloadEnabled && effectiveStatus === 'Cambios solicitados' && (
                 <AlertCircle className="w-4 h-4 shrink-0" />
               )}
-              {effectiveStatus === 'En revisión' && (
+              {!isDownloadEnabled && effectiveStatus === 'En revisión' && (
                 <Clock className="w-4 h-4 shrink-0" />
               )}
               <span>
@@ -346,36 +471,27 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
           </div>
         )}
 
-        {/* Payment & Delivery Bar when Approved OR when Download is Enabled */}
+        {/* Payment & Final Files Delivery Section when Approved OR when Download is Enabled */}
         {(effectiveStatus === 'Aprobado' || isDownloadEnabled) && (
           <div
-            className="mt-4 pt-4 border-t border-[#2A2A2A] flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-[#0A0A0A] -mx-4 sm:-mx-6 -mb-4 sm:-mb-6 p-4 sm:px-6 rounded-b-2xl"
+            className="mt-4 pt-4 border-t border-[#2A2A2A] space-y-3 bg-[#0A0A0A] -mx-4 sm:-mx-6 -mb-4 sm:-mb-6 p-4 sm:px-6 rounded-b-2xl"
             data-testid="delivery-actions-bar"
           >
             {!isDownloadEnabled ? (
               <>
-                <div className="flex flex-wrap items-center gap-3">
-                  <button
-                    type="button"
-                    data-testid="view-payment-data-btn"
-                    onClick={() => setIsYapeModalOpen(true)}
-                    className="min-h-[44px] px-4 py-2.5 rounded-xl bg-transparent hover:bg-white/10 border border-white text-white text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-2 transition-colors cursor-pointer"
-                  >
-                    <CreditCard className="w-4 h-4 shrink-0" />
-                    <span>Ver datos de pago</span>
-                  </button>
-                </div>
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <button
+                      type="button"
+                      data-testid="view-payment-data-btn"
+                      onClick={() => setIsYapeModalOpen(true)}
+                      className="min-h-[44px] px-4 py-2.5 rounded-xl bg-transparent hover:bg-white/10 border border-white text-white text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                    >
+                      <CreditCard className="w-4 h-4 shrink-0" />
+                      <span>Ver datos de pago</span>
+                    </button>
+                  </div>
 
-                <div className="flex flex-col sm:items-end gap-1.5">
-                  <button
-                    type="button"
-                    disabled
-                    data-testid="locked-download-btn"
-                    className="min-h-[44px] px-4 py-2.5 rounded-xl bg-[#1A1A1A] border border-[#2A2A2A] text-neutral-500 text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-2 cursor-not-allowed select-none"
-                  >
-                    <Lock className="w-4 h-4 shrink-0" />
-                    <span>Descargar video</span>
-                  </button>
                   <span
                     className="text-xs text-neutral-400"
                     data-testid="locked-download-helper"
@@ -383,36 +499,100 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
                     Se habilita al confirmar el pago
                   </span>
                 </div>
+
+                {/* Locked final files list (with lock icon, no links) */}
+                <div
+                  className="space-y-2 pt-2 border-t border-[#2A2A2A]"
+                  data-testid="locked-files-list"
+                >
+                  {lockedFileNames.map((fileName, idx) => (
+                    <div
+                      key={`${idx}-${fileName}`}
+                      className="flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl bg-[#111111] border border-[#2A2A2A] text-neutral-500"
+                    >
+                      <span className="inline-flex items-center gap-2 text-xs sm:text-sm font-mono truncate">
+                        <Lock className="w-4 h-4 shrink-0 text-neutral-500" />
+                        <span className="truncate">{fileName}</span>
+                      </span>
+
+                      <button
+                        type="button"
+                        disabled
+                        data-testid={idx === 0 ? 'locked-download-btn' : undefined}
+                        className="min-h-[36px] px-3.5 py-1.5 rounded-lg bg-[#1A1A1A] border border-[#2A2A2A] text-neutral-500 text-xs font-semibold inline-flex items-center gap-1.5 cursor-not-allowed select-none shrink-0"
+                      >
+                        <Lock className="w-3.5 h-3.5 shrink-0" />
+                        <span>Descargar</span>
+                      </button>
+                    </div>
+                  ))}
+                </div>
               </>
             ) : (
-              <div className="w-full flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                <div className="space-y-0.5">
+              <div className="space-y-3" data-testid="unlocked-files-list">
+                <div className="flex items-center justify-between gap-2">
                   <p className="text-sm font-semibold text-white">
                     Entrega final habilitada
                   </p>
-                  <p className="text-xs text-neutral-400 font-mono">
-                    Archivo: {finalFilename}
-                  </p>
+                  <span className="text-xs text-neutral-400 font-mono">
+                    {unlockedFinalFiles.length}{' '}
+                    {unlockedFinalFiles.length === 1 ? 'archivo' : 'archivos'}
+                  </span>
                 </div>
 
-                {finalVideoUrl ? (
-                  <button
-                    type="button"
-                    onClick={handleDownloadFinalVideo}
-                    disabled={isDownloading}
-                    data-testid="active-download-btn"
-                    title={`Descargar ${finalFilename}`}
-                    className="min-h-[44px] px-5 py-2.5 rounded-xl bg-white hover:bg-neutral-200 text-black font-semibold text-xs sm:text-sm inline-flex items-center justify-center gap-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-                  >
-                    <Download className="w-4 h-4 shrink-0" />
-                    <span>
-                      {isDownloading ? 'Descargando...' : 'Descargar video'}
-                    </span>
-                  </button>
-                ) : (
-                  <span className="text-xs text-neutral-400">
-                    Preparando enlace de descarga...
+                {unlockedFinalFiles.length === 0 ? (
+                  <span className="text-xs text-neutral-400 block">
+                    Preparando archivos de descarga...
                   </span>
+                ) : (
+                  <div className="space-y-2">
+                    {unlockedFinalFiles.map((file, idx) => {
+                      const isDrive = isGoogleDriveUrl(file.url);
+                      const isBusy = downloadingFileUrl === file.url;
+
+                      return (
+                        <div
+                          key={`${idx}-${file.name}`}
+                          className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5 px-3.5 py-2.5 rounded-xl bg-[#111111] border border-[#2A2A2A]"
+                        >
+                          <span className="text-xs sm:text-sm font-mono text-white truncate">
+                            {file.name}
+                          </span>
+
+                          {isDrive ? (
+                            <a
+                              href={file.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              data-testid={
+                                idx === 0 ? 'active-download-btn' : undefined
+                              }
+                              className="min-h-[38px] px-4 py-1.5 rounded-xl bg-white hover:bg-neutral-200 text-black font-semibold text-xs inline-flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
+                            >
+                              <Download className="w-3.5 h-3.5 shrink-0" />
+                              <span>Descargar</span>
+                              <ExternalLink className="w-3 h-3 shrink-0" />
+                            </a>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => handleDownloadFile(file)}
+                              disabled={isBusy}
+                              data-testid={
+                                idx === 0 ? 'active-download-btn' : undefined
+                              }
+                              className="min-h-[38px] px-4 py-1.5 rounded-xl bg-white hover:bg-neutral-200 text-black font-semibold text-xs inline-flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                            >
+                              <Download className="w-3.5 h-3.5 shrink-0" />
+                              <span>
+                                {isBusy ? 'Descargando...' : 'Descargar'}
+                              </span>
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
                 )}
               </div>
             )}
@@ -420,20 +600,33 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
         )}
       </section>
 
-      {/* Main 2-Column Layout: Video Left/Center (7 cols) + Time-coded Comments Right/Bottom (5 cols) */}
+      {/* Main 2-Column Layout: Video/Images Left (7 cols) + Comments Right (5 cols) */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        {/* Left/Top Column: Centered Vertical Video Player (always plays preview video with watermark) */}
+        {/* Left/Top Column: Video Player OR Image Gallery Viewer */}
         <div className="lg:col-span-7 bg-[#111111] border border-[#2A2A2A] rounded-2xl p-4 sm:p-6 flex flex-col items-center">
-          <VideoPlayer
-            ref={playerRef}
-            videoUrl={project.videoUrl}
-            watermarkEnabled={project.watermarkEnabled}
-            watermarkText={project.watermarkText}
-            commentSeconds={sortedComments.map((c) => c.videoSecond)}
-            onTimeUpdate={(sec) => setLiveSecond(sec)}
-          />
+          {isImagesProject ? (
+            <ImageGalleryViewer
+              imageUrls={project.imageUrls || []}
+              currentIndex={currentImageIndex}
+              onChangeIndex={(idx) => setCurrentImageIndex(idx)}
+              watermarkEnabled={project.watermarkEnabled}
+              watermarkText={project.watermarkText}
+              commentImageNumbers={sortedComments
+                .map((c) => c.imageNumber ?? 1)
+                .filter((n) => n >= 1)}
+            />
+          ) : (
+            <VideoPlayer
+              ref={playerRef}
+              videoUrl={project.videoUrl}
+              watermarkEnabled={project.watermarkEnabled}
+              watermarkText={project.watermarkText}
+              commentSeconds={sortedComments.map((c) => c.videoSecond)}
+              onTimeUpdate={(sec) => setLiveSecond(sec)}
+            />
+          )}
 
-          {/* Primary Quick-Action underneath the player */}
+          {/* Primary Quick-Action underneath the player/viewer */}
           <div className="w-full max-w-[380px] mt-4">
             <button
               type="button"
@@ -442,10 +635,19 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
               className="w-full min-h-[48px] px-4 py-3 rounded-xl bg-white hover:bg-neutral-200 text-black font-semibold text-sm inline-flex items-center justify-center gap-2.5 transition-all cursor-pointer active:scale-[0.99]"
             >
               <MessageSquarePlus className="w-5 h-5 shrink-0" />
-              <span>Comentar en este momento</span>
-              <span className="font-mono tabular-nums bg-black/15 px-2 py-0.5 rounded-md text-xs font-bold">
-                {formatVideoTimestamp(liveSecond)}
-              </span>
+              {isImagesProject ? (
+                <span>
+                  Comentar en esta imagen ({currentImageDisplayNumber}/
+                  {Math.max(1, totalImages)})
+                </span>
+              ) : (
+                <>
+                  <span>Comentar en este momento</span>
+                  <span className="font-mono tabular-nums bg-black/15 px-2 py-0.5 rounded-md text-xs font-bold">
+                    {formatVideoTimestamp(liveSecond)}
+                  </span>
+                </>
+              )}
             </button>
           </div>
         </div>
@@ -455,10 +657,14 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
           <div className="flex items-center justify-between gap-2 pb-4 border-b border-[#2A2A2A]">
             <div>
               <h2 className="text-base font-semibold text-white">
-                Comentarios en el video
+                {isImagesProject
+                  ? 'Comentarios en las imágenes'
+                  : 'Comentarios en el video'}
               </h2>
               <p className="text-xs text-neutral-400 mt-0.5">
-                Toca cualquier comentario para saltar a ese segundo exacto
+                {isImagesProject
+                  ? 'Toca cualquier comentario para saltar a esa imagen'
+                  : 'Toca cualquier comentario para saltar a ese segundo exacto'}
               </p>
             </div>
             <span className="font-mono tabular-nums text-xs text-neutral-400">
@@ -467,7 +673,7 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
             </span>
           </div>
 
-          {/* Button inside comments panel to trigger or toggle moment composer */}
+          {/* Button inside comments panel to trigger or toggle moment/image composer */}
           {!isComposerOpen ? (
             <button
               type="button"
@@ -476,11 +682,20 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
             >
               <span className="inline-flex items-center gap-2">
                 <MessageSquarePlus className="w-4 h-4 text-white" />
-                <span>Agregar nota en el segundo actual</span>
+                <span>
+                  {isImagesProject
+                    ? `Comentar en esta imagen (${currentImageDisplayNumber}/${Math.max(
+                        1,
+                        totalImages
+                      )})`
+                    : 'Agregar nota en el segundo actual'}
+                </span>
               </span>
-              <span className="font-mono tabular-nums text-white font-semibold">
-                {formatVideoTimestamp(liveSecond)}
-              </span>
+              {!isImagesProject && (
+                <span className="font-mono tabular-nums text-white font-semibold">
+                  {formatVideoTimestamp(liveSecond)}
+                </span>
+              )}
             </button>
           ) : (
             <form
@@ -490,21 +705,36 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
             >
               <div className="flex items-center justify-between gap-2">
                 <span className="text-xs font-semibold text-white">
-                  Nuevo comentario en segundo exacto
+                  {isImagesProject
+                    ? `Nuevo comentario en imagen (${capturedImageNumber}/${Math.max(
+                        1,
+                        totalImages
+                      )})`
+                    : 'Nuevo comentario en segundo exacto'}
                 </span>
-                <div className="flex items-center gap-1.5">
-                  <label htmlFor="comment-timestamp-input" className="sr-only">
-                    Segundo del video (MM:SS)
-                  </label>
-                  <input
-                    id="comment-timestamp-input"
-                    type="text"
-                    value={customTimeInput}
-                    onChange={(e) => setCustomTimeInput(e.target.value)}
-                    className="w-20 px-2 py-1 rounded-lg bg-[#111111] border border-[#2A2A2A] font-mono tabular-nums text-xs text-center text-white focus:outline-none focus:border-white"
-                    placeholder="00:19"
-                  />
-                </div>
+
+                {isImagesProject ? (
+                  <span className="px-2.5 py-1 rounded-lg bg-[#111111] border border-[#2A2A2A] font-mono tabular-nums text-xs text-white">
+                    {capturedImageNumber} / {Math.max(1, totalImages)}
+                  </span>
+                ) : (
+                  <div className="flex items-center gap-1.5">
+                    <label
+                      htmlFor="comment-timestamp-input"
+                      className="sr-only"
+                    >
+                      Segundo del video (MM:SS)
+                    </label>
+                    <input
+                      id="comment-timestamp-input"
+                      type="text"
+                      value={customTimeInput}
+                      onChange={(e) => setCustomTimeInput(e.target.value)}
+                      className="w-20 px-2 py-1 rounded-lg bg-[#111111] border border-[#2A2A2A] font-mono tabular-nums text-xs text-center text-white focus:outline-none focus:border-white"
+                      placeholder="00:19"
+                    />
+                  </div>
+                )}
               </div>
 
               {!savedClientName || isEditingName ? (
@@ -531,7 +761,8 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
                   <span className="inline-flex items-center gap-1.5">
                     <User className="w-3.5 h-3.5 text-neutral-400" />
                     <span>
-                      Comentando como <strong className="text-white">{savedClientName}</strong>
+                      Comentando como{' '}
+                      <strong className="text-white">{savedClientName}</strong>
                     </span>
                   </span>
                   <button
@@ -552,7 +783,9 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
                   htmlFor="client-comment-text"
                   className="block text-xs font-medium text-neutral-300 mb-1"
                 >
-                  ¿Qué cambio o detalle necesitas en este momento?
+                  {isImagesProject
+                    ? '¿Qué cambio o detalle necesitas en esta imagen?'
+                    : '¿Qué cambio o detalle necesitas en este momento?'}
                 </label>
                 <textarea
                   ref={commentInputRef}
@@ -567,7 +800,10 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
               </div>
 
               {formError && (
-                <p className="text-xs text-white bg-[#111111] border border-white rounded-lg p-2.5" role="alert">
+                <p
+                  className="text-xs text-white bg-[#111111] border border-white rounded-lg p-2.5"
+                  role="alert"
+                >
                   {formError}
                 </p>
               )}
@@ -590,7 +826,9 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
                 >
                   <Send className="w-3.5 h-3.5" />
                   <span>
-                    {isSubmittingComment ? 'Guardando...' : 'Guardar comentario'}
+                    {isSubmittingComment
+                      ? 'Guardando...'
+                      : 'Guardar comentario'}
                   </span>
                 </button>
               </div>
@@ -598,75 +836,96 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
           )}
 
           {formError && !isComposerOpen && (
-            <div className="mt-3 p-3 rounded-xl bg-[#0A0A0A] border border-white text-xs text-white" role="alert">
+            <div
+              className="mt-3 p-3 rounded-xl bg-[#0A0A0A] border border-white text-xs text-white"
+              role="alert"
+            >
               {formError}
             </div>
           )}
 
-          {/* Time-ordered list of comments */}
+          {/* Ordered list of comments */}
           <div className="mt-4 divide-y divide-[#2A2A2A] max-h-[520px] overflow-y-auto pr-1">
             {sortedComments.length === 0 ? (
               <div className="py-10 text-center space-y-2">
                 <p className="text-sm font-medium text-neutral-300">
-                  Aún no hay comentarios en este video
+                  {isImagesProject
+                    ? 'Aún no hay comentarios en estas imágenes'
+                    : 'Aún no hay comentarios en este video'}
                 </p>
                 <p className="text-xs text-neutral-500 max-w-xs mx-auto">
-                  Reproduce el video y presiona &ldquo;Comentar en este momento&rdquo; para dejar una nota en el segundo exacto.
+                  {isImagesProject
+                    ? 'Navega por las imágenes y presiona “Comentar en esta imagen” para dejar una nota.'
+                    : 'Reproduce el video y presiona “Comentar en este momento” para dejar una nota en el segundo exacto.'}
                 </p>
               </div>
             ) : (
-              sortedComments.map((comment) => (
-                <button
-                  key={comment.id}
-                  type="button"
-                  onClick={() => handleSeekToComment(comment.videoSecond)}
-                  className={`w-full text-left py-3.5 px-3 first:mt-0 rounded-xl transition-colors flex items-start gap-3 group cursor-pointer ${
-                    comment.resolved
-                      ? 'opacity-50 hover:opacity-75 bg-transparent'
-                      : 'hover:bg-white/5'
-                  }`}
-                >
-                  {/* Timestamp Trigger */}
-                  <span
-                    className={`mt-0.5 inline-flex items-center gap-1 px-2.5 py-1 rounded-lg font-mono tabular-nums text-xs font-semibold shrink-0 transition-colors ${
+              sortedComments.map((comment) => {
+                const imgNum = comment.imageNumber ?? 1;
+                return (
+                  <button
+                    key={comment.id}
+                    type="button"
+                    onClick={() => handleSeekToComment(comment)}
+                    className={`w-full text-left py-3.5 px-3 first:mt-0 rounded-xl transition-colors flex items-start gap-3 group cursor-pointer ${
                       comment.resolved
-                        ? 'bg-[#0A0A0A] border border-[#2A2A2A] text-neutral-500 line-through'
-                        : 'bg-white text-black group-hover:bg-neutral-200'
+                        ? 'opacity-50 hover:opacity-75 bg-transparent'
+                        : 'hover:bg-white/5'
                     }`}
                   >
-                    <Play className="w-3 h-3 fill-current" />
-                    {formatVideoTimestamp(comment.videoSecond)}
-                  </span>
-
-                  <div className="min-w-0 flex-1 space-y-1">
-                    <div className="flex items-center justify-between gap-2 text-xs">
-                      <span
-                        className={`font-semibold truncate ${
-                          comment.resolved ? 'text-neutral-500' : 'text-white'
-                        }`}
-                      >
-                        {comment.authorName}
-                      </span>
-                      {comment.resolved && (
-                        <span className="inline-flex items-center gap-1 text-xs text-neutral-400 shrink-0">
-                          <Check className="w-3 h-3" />
-                          <span>Resuelto</span>
-                        </span>
-                      )}
-                    </div>
-
-                    <p
-                      className={`text-sm leading-relaxed break-words ${
+                    {/* Timestamp or Image Number Trigger */}
+                    <span
+                      className={`mt-0.5 inline-flex items-center gap-1 px-2.5 py-1 rounded-lg font-mono tabular-nums text-xs font-semibold shrink-0 transition-colors ${
                         comment.resolved
-                          ? 'line-through text-neutral-500'
-                          : 'text-neutral-200'
+                          ? 'bg-[#0A0A0A] border border-[#2A2A2A] text-neutral-500 line-through'
+                          : 'bg-white text-black group-hover:bg-neutral-200'
                       }`}
                     >
-                      {comment.text}
-                    </p>
-                  </div>
-                </button>
-              ))
+                      {isImagesProject ? (
+                        <>
+                          <ImageIcon className="w-3 h-3" />
+                          <span>
+                            {imgNum}/{Math.max(1, totalImages)}
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <Play className="w-3 h-3 fill-current" />
+                          <span>{formatVideoTimestamp(comment.videoSecond)}</span>
+                        </>
+                      )}
+                    </span>
+
+                    <div className="min-w-0 flex-1 space-y-1">
+                      <div className="flex items-center justify-between gap-2 text-xs">
+                        <span
+                          className={`font-semibold truncate ${
+                            comment.resolved ? 'text-neutral-500' : 'text-white'
+                          }`}
+                        >
+                          {comment.authorName}
+                        </span>
+                        {comment.resolved && (
+                          <span className="inline-flex items-center gap-1 text-xs text-neutral-400 shrink-0">
+                            <Check className="w-3 h-3" />
+                            <span>Resuelto</span>
+                          </span>
+                        )}
+                      </div>
+
+                      <p
+                        className={`text-sm leading-relaxed break-words ${
+                          comment.resolved
+                            ? 'line-through text-neutral-500'
+                            : 'text-neutral-200'
+                        }`}
+                      >
+                        {comment.text}
+                      </p>
+                    </div>
+                  </button>
+                );
+              })
             )}
           </div>
         </aside>
@@ -696,6 +955,7 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {moreProjects.map((item) => {
                 const st = getStatusVisuals(item.status);
+                const isItemImages = item.projectType === 'images';
                 return (
                   <a
                     key={item.id}
@@ -705,21 +965,38 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
                   >
                     <div className="space-y-2">
                       <div className="flex items-center justify-between gap-2">
-                        <span
-                          className={`inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded ${st.badgeClass}`}
-                        >
-                          {(item.status === 'Aprobado' ||
-                            item.status === 'Entregado') && (
-                            <CheckCircle2 className="w-3 h-3 shrink-0" />
-                          )}
-                          {item.status === 'Cambios solicitados' && (
-                            <AlertCircle className="w-3 h-3 shrink-0" />
-                          )}
-                          {item.status === 'En revisión' && (
-                            <Clock className="w-3 h-3 shrink-0" />
-                          )}
-                          <span>{item.status}</span>
-                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <span
+                            className="inline-flex items-center justify-center w-5 h-5 rounded bg-[#111111] border border-[#2A2A2A] text-neutral-300 shrink-0"
+                            title={
+                              isItemImages
+                                ? 'Proyecto de imágenes'
+                                : 'Proyecto de video'
+                            }
+                          >
+                            {isItemImages ? (
+                              <ImageIcon className="w-3 h-3" />
+                            ) : (
+                              <Film className="w-3 h-3" />
+                            )}
+                          </span>
+
+                          <span
+                            className={`inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded ${st.badgeClass}`}
+                          >
+                            {(item.status === 'Aprobado' ||
+                              item.status === 'Entregado') && (
+                              <CheckCircle2 className="w-3 h-3 shrink-0" />
+                            )}
+                            {item.status === 'Cambios solicitados' && (
+                              <AlertCircle className="w-3 h-3 shrink-0" />
+                            )}
+                            {item.status === 'En revisión' && (
+                              <Clock className="w-3 h-3 shrink-0" />
+                            )}
+                            <span>{item.status}</span>
+                          </span>
+                        </div>
 
                         {item.showPrice && typeof item.price === 'number' && (
                           <span className="font-mono tabular-nums text-xs font-semibold text-white shrink-0">
@@ -748,50 +1025,53 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
       })()}
 
       {/* Status Confirmation Modal (Monochrome Black & White) */}
-      {pendingConfirmAction && !isDownloadEnabled && (() => {
-        const confirmConfig = getStatusConfirmationConfig(pendingConfirmAction);
-        return (
-          <div
-            className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="status-confirm-message"
-            data-testid="status-confirmation-modal"
-          >
-            <div className="w-full max-w-sm bg-[#111111] border border-white rounded-2xl p-6 space-y-5 text-white shadow-2xl">
-              <p
-                id="status-confirm-message"
-                className="text-sm sm:text-base font-medium text-white leading-relaxed"
-                data-testid="status-confirm-message"
-              >
-                {confirmConfig.message}
-              </p>
-
-              <div className="flex items-center justify-end gap-2.5 pt-1">
-                <button
-                  type="button"
-                  disabled={isUpdatingStatus}
-                  data-testid="status-confirm-cancel-btn"
-                  onClick={() => setPendingConfirmAction(null)}
-                  className="min-h-[42px] px-4 py-2 rounded-xl bg-transparent hover:bg-white/10 border border-white text-white text-xs sm:text-sm font-semibold transition-colors cursor-pointer"
+      {pendingConfirmAction &&
+        !isDownloadEnabled &&
+        (() => {
+          const confirmConfig =
+            getStatusConfirmationConfig(pendingConfirmAction);
+          return (
+            <div
+              className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="status-confirm-message"
+              data-testid="status-confirmation-modal"
+            >
+              <div className="w-full max-w-sm bg-[#111111] border border-white rounded-2xl p-6 space-y-5 text-white shadow-2xl">
+                <p
+                  id="status-confirm-message"
+                  className="text-sm sm:text-base font-medium text-white leading-relaxed"
+                  data-testid="status-confirm-message"
                 >
-                  {confirmConfig.cancelLabel}
-                </button>
+                  {confirmConfig.message}
+                </p>
 
-                <button
-                  type="button"
-                  disabled={isUpdatingStatus}
-                  data-testid="status-confirm-submit-btn"
-                  onClick={handleConfirmStatusAction}
-                  className="min-h-[42px] px-4 py-2 rounded-xl bg-white hover:bg-neutral-200 text-black text-xs sm:text-sm font-semibold transition-colors cursor-pointer"
-                >
-                  {confirmConfig.confirmLabel}
-                </button>
+                <div className="flex items-center justify-end gap-2.5 pt-1">
+                  <button
+                    type="button"
+                    disabled={isUpdatingStatus}
+                    data-testid="status-confirm-cancel-btn"
+                    onClick={() => setPendingConfirmAction(null)}
+                    className="min-h-[42px] px-4 py-2 rounded-xl bg-transparent hover:bg-white/10 border border-white text-white text-xs sm:text-sm font-semibold transition-colors cursor-pointer"
+                  >
+                    {confirmConfig.cancelLabel}
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={isUpdatingStatus}
+                    data-testid="status-confirm-submit-btn"
+                    onClick={handleConfirmStatusAction}
+                    className="min-h-[42px] px-4 py-2 rounded-xl bg-white hover:bg-neutral-200 text-black text-xs sm:text-sm font-semibold transition-colors cursor-pointer"
+                  >
+                    {confirmConfig.confirmLabel}
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
-        );
-      })()}
+          );
+        })()}
 
       {/* Yape Payment Modal ("Pago por Yape") */}
       {isYapeModalOpen && !isDownloadEnabled && (
@@ -876,7 +1156,8 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
                 className="text-sm text-neutral-200 leading-relaxed"
                 data-testid="yape-instructions-text"
               >
-                Realiza el pago por Yape y envíame la captura. Cuando lo confirme, se habilitará la descarga.
+                Realiza el pago por Yape y envíame la captura. Cuando lo
+                confirme, se habilitará la descarga.
               </p>
 
               {/* Enlace pequeño y secundario "Enviar captura por WhatsApp" */}

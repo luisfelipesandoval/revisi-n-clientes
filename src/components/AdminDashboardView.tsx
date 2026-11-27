@@ -12,6 +12,10 @@ import {
   LogOut,
   Save,
   Film,
+  Image as ImageIcon,
+  ArrowUp,
+  ArrowDown,
+  FileText,
   Eye,
   EyeOff,
   ShieldAlert,
@@ -24,6 +28,7 @@ import {
 import { User as FirebaseUser } from 'firebase/auth';
 import {
   Cliente,
+  FinalDeliveryFile,
   Project,
   ProjectFormInput,
   ProjectStatus,
@@ -38,6 +43,7 @@ import {
   getStatusVisuals,
   getAdminDeliveryBadge,
   parseVideoUrl,
+  parseImageUrlsFromText,
 } from '../utils/video';
 import {
   VALID_STATUSES,
@@ -60,6 +66,7 @@ interface AdminDashboardViewProps {
   clientes: Cliente[];
   selectedProjectId: string | null;
   selectedProjectFinalVideoUrl: string;
+  selectedProjectFinalFiles: FinalDeliveryFile[];
   onSelectProject: (projectId: string) => void;
   commentsForSelected: VideoComment[];
   onCreateProject: (input: ProjectFormInput) => Promise<string>;
@@ -77,8 +84,11 @@ const DEFAULT_FORM_INPUT: ProjectFormInput = {
   clientId: '',
   clientNote: '',
   mostrarEnListaCliente: true,
+  projectType: 'video',
   videoUrl: '',
+  imageUrls: [],
   finalVideoUrl: '',
+  finalFiles: [],
   descargaHabilitada: false,
   price: 0,
   currency: 'S/',
@@ -100,6 +110,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   clientes,
   selectedProjectId,
   selectedProjectFinalVideoUrl,
+  selectedProjectFinalFiles,
   onSelectProject,
   commentsForSelected,
   onCreateProject,
@@ -119,6 +130,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
 
   const [isCreatingNew, setIsCreatingNew] = useState<boolean>(false);
   const [formState, setFormState] = useState<ProjectFormInput>(DEFAULT_FORM_INPUT);
+  const [rawImageLinksText, setRawImageLinksText] = useState<string>('');
   const [formError, setFormError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState<boolean>(false);
@@ -192,6 +204,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
       if (loadedProjectIdRef.current !== '__new__') {
         loadedProjectIdRef.current = '__new__';
         setFormState(DEFAULT_FORM_INPUT);
+        setRawImageLinksText('');
         setFormError(null);
         setSaveSuccess(null);
         setShowConfirmPaymentModal(false);
@@ -208,8 +221,15 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
           clientId: selectedProject.clientId || '',
           clientNote: '',
           mostrarEnListaCliente: selectedProject.mostrarEnListaCliente !== false,
+          projectType: selectedProject.projectType === 'images' ? 'images' : 'video',
           videoUrl: selectedProject.videoUrl,
+          imageUrls: Array.isArray(selectedProject.imageUrls)
+            ? [...selectedProject.imageUrls]
+            : [],
           finalVideoUrl: selectedProjectFinalVideoUrl || '',
+          finalFiles: Array.isArray(selectedProjectFinalFiles)
+            ? selectedProjectFinalFiles.map((f) => ({ ...f }))
+            : [],
           descargaHabilitada: Boolean(selectedProject.descargaHabilitada),
           price: selectedProject.price,
           currency: selectedProject.currency,
@@ -219,25 +239,40 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
           status: selectedProject.status,
           whatsappNumber: selectedProject.whatsappNumber,
         });
+        setRawImageLinksText('');
         setConfirmDeleteId(null);
         setShowConfirmPaymentModal(false);
       }
     } else if (loadedProjectIdRef.current !== null) {
       loadedProjectIdRef.current = null;
       setFormState(DEFAULT_FORM_INPUT);
+      setRawImageLinksText('');
       setShowConfirmPaymentModal(false);
     }
-  }, [selectedProject, isCreatingNew, selectedProjectFinalVideoUrl]);
+  }, [
+    selectedProject,
+    isCreatingNew,
+    selectedProjectFinalVideoUrl,
+    selectedProjectFinalFiles,
+  ]);
 
-  // Sync finalVideoUrl from entregas/{projectId} listener when it arrives for the selected project
+  // Sync finalVideoUrl & finalFiles from entregas/{projectId} listener when it arrives for the selected project
   useEffect(() => {
     if (!isCreatingNew && selectedProject && loadedProjectIdRef.current === selectedProject.id) {
       setFormState((prev) => ({
         ...prev,
         finalVideoUrl: selectedProjectFinalVideoUrl,
+        finalFiles: Array.isArray(selectedProjectFinalFiles)
+          ? selectedProjectFinalFiles.map((f) => ({ ...f }))
+          : prev.finalFiles,
       }));
     }
-  }, [selectedProjectFinalVideoUrl, isCreatingNew, selectedProject]);
+  }, [
+    selectedProjectFinalVideoUrl,
+    selectedProjectFinalFiles,
+    isCreatingNew,
+    selectedProject,
+  ]);
 
   // Also keep status, descargaHabilitada, and clientId synced if updated in real-time
   useEffect(() => {
@@ -309,6 +344,79 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
     setShowConfirmPaymentModal(false);
   };
 
+  // Image list management helpers
+  const handleAddPastedImageLinks = () => {
+    setFormError(null);
+    const { validUrls, invalidLines } = parseImageUrlsFromText(rawImageLinksText);
+    if (invalidLines.length > 0) {
+      setFormError(
+        `Enlace de imagen no válido: ${invalidLines[0]}. Asegúrate de que empiece con http:// o https://.`
+      );
+      return;
+    }
+    if (validUrls.length === 0) return;
+    setFormState((prev) => ({
+      ...prev,
+      imageUrls: [...prev.imageUrls, ...validUrls],
+    }));
+    setRawImageLinksText('');
+  };
+
+  const handleMoveImage = (index: number, direction: 'up' | 'down') => {
+    setFormState((prev) => {
+      const next = [...prev.imageUrls];
+      const targetIndex = direction === 'up' ? index - 1 : index + 1;
+      if (targetIndex < 0 || targetIndex >= next.length) return prev;
+      const temp = next[index];
+      next[index] = next[targetIndex];
+      next[targetIndex] = temp;
+      return { ...prev, imageUrls: next };
+    });
+  };
+
+  const handleRemoveImage = (index: number) => {
+    setFormState((prev) => ({
+      ...prev,
+      imageUrls: prev.imageUrls.filter((_, i) => i !== index),
+    }));
+  };
+
+  const handleUpdateImageUrlAt = (index: number, newUrl: string) => {
+    setFormState((prev) => {
+      const next = [...prev.imageUrls];
+      next[index] = newUrl;
+      return { ...prev, imageUrls: next };
+    });
+  };
+
+  // Final files management helpers
+  const handleAddFinalFileRow = () => {
+    setFormState((prev) => ({
+      ...prev,
+      finalFiles: [...prev.finalFiles, { name: '', url: '' }],
+    }));
+  };
+
+  const handleUpdateFinalFileRow = (
+    index: number,
+    field: 'name' | 'url',
+    value: string
+  ) => {
+    setFormState((prev) => {
+      const next = prev.finalFiles.map((item, i) =>
+        i === index ? { ...item, [field]: value } : item
+      );
+      return { ...prev, finalFiles: next };
+    });
+  };
+
+  const handleRemoveFinalFileRow = (index: number) => {
+    setFormState((prev) => ({
+      ...prev,
+      finalFiles: prev.finalFiles.filter((_, i) => i !== index),
+    }));
+  };
+
   // Autocomplete helpers for Cliente input
   const matchingClients = filterMatchingClients(clientes, formState.clientName);
   const similarClient = !formState.clientId
@@ -361,9 +469,9 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
     const trimmedTitle = formState.title.trim();
     const trimmedClient = formState.clientName.trim();
     const trimmedUrl = formState.videoUrl.trim();
-    const trimmedFinalUrl = formState.finalVideoUrl.trim();
     const trimmedWatermark = formState.watermarkText.trim();
     const trimmedWa = formState.whatsappNumber.trim();
+    const projectType = formState.projectType === 'images' ? 'images' : 'video';
 
     if (!trimmedTitle) {
       setFormError('El título del proyecto es obligatorio.');
@@ -373,22 +481,86 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
       setFormError('El nombre del cliente es obligatorio.');
       return;
     }
-    const parsedVideo = parseVideoUrl(trimmedUrl);
-    if (parsedVideo.type === 'invalid') {
-      setFormError(parsedVideo.reason);
+
+    // Merge any remaining pasted image links in the textarea into imageUrls
+    const pendingPasted = parseImageUrlsFromText(rawImageLinksText);
+    if (projectType === 'images' && pendingPasted.invalidLines.length > 0) {
+      setFormError(
+        `Enlace de imagen no válido: ${pendingPasted.invalidLines[0]}`
+      );
       return;
     }
-    if (trimmedFinalUrl) {
-      const parsedFinal = parseVideoUrl(trimmedFinalUrl);
-      if (parsedFinal.type === 'invalid') {
-        setFormError(`Enlace del video FINAL: ${parsedFinal.reason}`);
+    const mergedImageUrls = [
+      ...formState.imageUrls.map((u) => u.trim()).filter(Boolean),
+      ...pendingPasted.validUrls,
+    ];
+
+    if (projectType === 'video') {
+      const parsedVideo = parseVideoUrl(trimmedUrl);
+      if (parsedVideo.type === 'invalid') {
+        setFormError(parsedVideo.reason);
         return;
       }
+    } else {
+      if (mergedImageUrls.length === 0) {
+        setFormError(
+          'Agrega al menos un enlace de imagen (JPG o PNG) para el proyecto de imágenes.'
+        );
+        return;
+      }
+      for (const imgUrl of mergedImageUrls) {
+        try {
+          const parsed = new URL(imgUrl);
+          if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+            setFormError(`Enlace de imagen no válido: ${imgUrl}`);
+            return;
+          }
+        } catch {
+          setFormError(`Enlace de imagen no válido: ${imgUrl}`);
+          return;
+        }
+      }
     }
+
+    // Validate finalFiles rows (ignore rows where both name and url are empty)
+    const cleanedFinalFiles: FinalDeliveryFile[] = [];
+    for (let i = 0; i < formState.finalFiles.length; i++) {
+      const row = formState.finalFiles[i];
+      const fName = row.name.trim();
+      const fUrl = row.url.trim();
+      if (!fName && !fUrl) continue;
+      if (!fUrl) {
+        setFormError(
+          `Ingresa el enlace para el archivo final "${fName || `#${i + 1}`}".`
+        );
+        return;
+      }
+      try {
+        const parsed = new URL(fUrl);
+        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+          setFormError(`El enlace del archivo final "${fName || fUrl}" debe usar http o https.`);
+          return;
+        }
+      } catch {
+        setFormError(`El enlace del archivo final "${fName || fUrl}" no es una URL válida.`);
+        return;
+      }
+      const fallbackName =
+        fName ||
+        decodeURIComponent(fUrl.split('/').pop()?.split('?')[0] || '') ||
+        `Archivo final ${cleanedFinalFiles.length + 1}`;
+      cleanedFinalFiles.push({
+        name: fallbackName.slice(0, 140),
+        url: fUrl.slice(0, 500),
+      });
+    }
+
     if (Number.isNaN(formState.price) || formState.price < 0) {
       setFormError('Ingresa un precio válido mayor o igual a 0.');
       return;
     }
+
+    const firstFinalUrl = cleanedFinalFiles[0]?.url || formState.finalVideoUrl.trim();
 
     const cleanInput: ProjectFormInput = {
       title: trimmedTitle,
@@ -396,8 +568,11 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
       clientId: formState.clientId,
       clientNote: formState.clientNote,
       mostrarEnListaCliente: Boolean(formState.mostrarEnListaCliente),
-      videoUrl: trimmedUrl,
-      finalVideoUrl: trimmedFinalUrl,
+      projectType,
+      videoUrl: projectType === 'video' ? trimmedUrl : '',
+      imageUrls: projectType === 'images' ? mergedImageUrls : [],
+      finalVideoUrl: firstFinalUrl,
+      finalFiles: cleanedFinalFiles,
       descargaHabilitada: Boolean(formState.descargaHabilitada),
       price: Number(formState.price),
       currency: formState.currency,
@@ -410,6 +585,13 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
 
     setIsSaving(true);
     try {
+      setFormState((prev) => ({
+        ...prev,
+        imageUrls: mergedImageUrls,
+        finalFiles: cleanedFinalFiles,
+      }));
+      setRawImageLinksText('');
+
       if (isCreatingNew || !selectedProject) {
         const newId = await onCreateProject(cleanInput);
         loadedProjectIdRef.current = newId;
@@ -571,7 +753,10 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
     );
   }
 
-  const sortedComments = sortCommentsByTime(commentsForSelected);
+  const sortedComments = sortCommentsByTime(
+    commentsForSelected,
+    selectedProject?.projectType || 'video'
+  );
 
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
@@ -949,6 +1134,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                           clientName: activeCliente.name,
                           clientId: activeCliente.id,
                         });
+                        setRawImageLinksText('');
                       }}
                       className="min-h-[38px] px-3.5 py-1.5 rounded-xl bg-white hover:bg-neutral-200 text-black text-xs font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
                     >
@@ -967,6 +1153,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                         const displayStatus: DisplayProjectStatus =
                           proj.descargaHabilitada ? 'Entregado' : proj.status;
                         const st = getStatusVisuals(displayStatus);
+                        const isImageProj = proj.projectType === 'images';
 
                         return (
                           <div
@@ -975,6 +1162,20 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                           >
                             <div className="space-y-1.5 min-w-0">
                               <div className="flex flex-wrap items-center gap-2">
+                                <span
+                                  className="inline-flex items-center justify-center text-neutral-400 shrink-0"
+                                  title={
+                                    isImageProj
+                                      ? 'Proyecto de imágenes'
+                                      : 'Proyecto de video'
+                                  }
+                                >
+                                  {isImageProj ? (
+                                    <ImageIcon className="w-3.5 h-3.5" />
+                                  ) : (
+                                    <Film className="w-3.5 h-3.5" />
+                                  )}
+                                </span>
                                 <span className="text-sm font-semibold text-white">
                                   {proj.title}
                                 </span>
@@ -1078,6 +1279,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                     proj.status,
                     Boolean(proj.descargaHabilitada)
                   );
+                  const isImageProj = proj.projectType === 'images';
 
                   return (
                     <div
@@ -1099,9 +1301,26 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                         className="w-full text-left space-y-2 cursor-pointer"
                       >
                         <div className="flex items-start justify-between gap-2">
-                          <span className="text-sm font-semibold text-white line-clamp-1">
-                            {proj.title}
-                          </span>
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <span
+                              className="inline-flex items-center justify-center text-neutral-400 shrink-0"
+                              title={
+                                isImageProj
+                                  ? 'Proyecto de imágenes'
+                                  : 'Proyecto de video'
+                              }
+                              data-testid={`admin-project-type-icon-${proj.id}`}
+                            >
+                              {isImageProj ? (
+                                <ImageIcon className="w-3.5 h-3.5" />
+                              ) : (
+                                <Film className="w-3.5 h-3.5" />
+                              )}
+                            </span>
+                            <span className="text-sm font-semibold text-white line-clamp-1">
+                              {proj.title}
+                            </span>
+                          </div>
                           <span className="font-mono tabular-nums text-xs text-neutral-200 shrink-0">
                             {formatPrice(proj.price, proj.currency)}
                           </span>
@@ -1212,6 +1431,50 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
               </div>
 
               <form onSubmit={handleFormSubmit} className="space-y-4">
+                {/* Selector de Tipo de proyecto: Video o Imágenes */}
+                <div>
+                  <label className="block text-xs font-medium text-neutral-300 mb-1.5">
+                    Tipo de proyecto
+                  </label>
+                  <div
+                    className="grid grid-cols-2 gap-3"
+                    role="radiogroup"
+                    aria-label="Tipo de proyecto"
+                  >
+                    <button
+                      type="button"
+                      data-testid="project-type-video-btn"
+                      onClick={() =>
+                        setFormState((prev) => ({ ...prev, projectType: 'video' }))
+                      }
+                      className={`min-h-[44px] px-4 py-2.5 rounded-xl border text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-2 transition-colors cursor-pointer ${
+                        formState.projectType !== 'images'
+                          ? 'bg-white text-black border-white'
+                          : 'bg-[#0A0A0A] text-neutral-300 border-[#2A2A2A] hover:border-white hover:text-white'
+                      }`}
+                    >
+                      <Film className="w-4 h-4" />
+                      <span>Video</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      data-testid="project-type-images-btn"
+                      onClick={() =>
+                        setFormState((prev) => ({ ...prev, projectType: 'images' }))
+                      }
+                      className={`min-h-[44px] px-4 py-2.5 rounded-xl border text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-2 transition-colors cursor-pointer ${
+                        formState.projectType === 'images'
+                          ? 'bg-white text-black border-white'
+                          : 'bg-[#0A0A0A] text-neutral-300 border-[#2A2A2A] hover:border-white hover:text-white'
+                      }`}
+                    >
+                      <ImageIcon className="w-4 h-4" />
+                      <span>Imágenes</span>
+                    </button>
+                  </div>
+                </div>
+
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <label
@@ -1347,56 +1610,243 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                   </div>
                 </div>
 
-                <div>
-                  <label
-                    htmlFor="proj-video-url"
-                    className="block text-xs font-medium text-neutral-300 mb-1.5"
-                  >
-                    Enlace del video (URL directa a archivo .mp4)
-                  </label>
-                  <input
-                    id="proj-video-url"
-                    type="url"
-                    maxLength={500}
-                    required
-                    value={formState.videoUrl}
-                    onChange={(e) =>
-                      setFormState((prev) => ({
-                        ...prev,
-                        videoUrl: e.target.value,
-                      }))
-                    }
-                    placeholder="https://.../video-borrador.mp4"
-                    className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-[#0A0A0A] border border-[#2A2A2A] text-sm text-white font-mono placeholder-neutral-500 focus:outline-none focus:border-white"
-                  />
-                </div>
-
-                {/* Enlace del video FINAL (sin marca de agua) — guardado en colección separada entregas/{projectId} */}
-                <div className="bg-[#0A0A0A] border border-[#2A2A2A] rounded-xl p-4 space-y-4">
+                {/* VISTA PREVIA: Campo de Video (.mp4) o Enlaces de Imágenes (JPG/PNG) */}
+                {formState.projectType !== 'images' ? (
                   <div>
                     <label
-                      htmlFor="proj-final-video-url"
-                      className="block text-xs font-medium text-white mb-1.5"
+                      htmlFor="proj-video-url"
+                      className="block text-xs font-medium text-neutral-300 mb-1.5"
                     >
-                      Enlace del video FINAL (sin marca de agua)
+                      Enlace del video (URL directa a archivo .mp4)
                     </label>
                     <input
-                      id="proj-final-video-url"
+                      id="proj-video-url"
                       type="url"
                       maxLength={500}
-                      value={formState.finalVideoUrl}
+                      required
+                      value={formState.videoUrl}
                       onChange={(e) =>
                         setFormState((prev) => ({
                           ...prev,
-                          finalVideoUrl: e.target.value,
+                          videoUrl: e.target.value,
                         }))
                       }
-                      placeholder="https://.../video-final-limpio.mp4"
-                      className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-[#111111] border border-[#2A2A2A] text-sm text-white font-mono placeholder-neutral-500 focus:outline-none focus:border-white"
+                      placeholder="https://.../video-borrador.mp4"
+                      className="w-full min-h-[44px] px-3.5 py-2 rounded-xl bg-[#0A0A0A] border border-[#2A2A2A] text-sm text-white font-mono placeholder-neutral-500 focus:outline-none focus:border-white"
                     />
-                    <p className="text-[11px] text-neutral-400 mt-1">
-                      Se guarda de forma protegida en la colección &ldquo;entregas&rdquo; y el cliente solo puede acceder cuando habilites la descarga.
-                    </p>
+                  </div>
+                ) : (
+                  <div className="bg-[#0A0A0A] border border-[#2A2A2A] rounded-xl p-4 space-y-4">
+                    <div className="space-y-2">
+                      <label
+                        htmlFor="proj-image-urls-textarea"
+                        className="block text-xs font-medium text-white"
+                      >
+                        Enlaces de imágenes de vista previa (JPG o PNG, uno por línea)
+                      </label>
+                      <textarea
+                        id="proj-image-urls-textarea"
+                        data-testid="image-urls-textarea"
+                        rows={4}
+                        value={rawImageLinksText}
+                        onChange={(e) => setRawImageLinksText(e.target.value)}
+                        placeholder={
+                          'https://.../pieza-1-preview.jpg\nhttps://.../pieza-2-preview.png'
+                        }
+                        className="w-full px-3.5 py-2.5 rounded-xl bg-[#111111] border border-[#2A2A2A] text-xs sm:text-sm text-white font-mono placeholder-neutral-500 focus:outline-none focus:border-white resize-y"
+                      />
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-[11px] text-neutral-400">
+                          Pega uno o varios enlaces (uno por línea) y agrégalos para ordenarlos o borrarlos.
+                        </p>
+                        <button
+                          type="button"
+                          data-testid="add-pasted-images-btn"
+                          onClick={handleAddPastedImageLinks}
+                          disabled={!rawImageLinksText.trim()}
+                          className="min-h-[36px] px-3.5 py-1.5 rounded-xl bg-white hover:bg-neutral-200 disabled:opacity-40 text-black text-xs font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          <span>Agregar imágenes a la lista</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Lista ordenable y borrable de imágenes de vista previa */}
+                    {formState.imageUrls.length > 0 && (
+                      <div className="space-y-2 pt-2 border-t border-[#2A2A2A]">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-semibold text-white">
+                            Imágenes agregadas ({formState.imageUrls.length})
+                          </span>
+                          <span className="text-[11px] text-neutral-400">
+                            Usa las flechas para reordenar
+                          </span>
+                        </div>
+
+                        <div
+                          className="space-y-2"
+                          data-testid="admin-preview-images-list"
+                        >
+                          {formState.imageUrls.map((imgUrl, idx) => (
+                            <div
+                              key={`${idx}-${imgUrl}`}
+                              data-testid={`admin-preview-image-row-${idx}`}
+                              className="flex items-center gap-2.5 bg-[#111111] border border-[#2A2A2A] rounded-xl p-2.5"
+                            >
+                              <span className="font-mono tabular-nums text-xs font-semibold px-2 py-1 rounded bg-[#0A0A0A] border border-[#2A2A2A] text-white shrink-0">
+                                {idx + 1}
+                              </span>
+
+                              <div className="w-10 h-10 rounded-lg bg-[#000000] border border-[#2A2A2A] overflow-hidden shrink-0 flex items-center justify-center">
+                                <img
+                                  src={imgUrl}
+                                  alt={`Miniatura ${idx + 1}`}
+                                  className="w-full h-full object-contain"
+                                />
+                              </div>
+
+                              <input
+                                type="url"
+                                value={imgUrl}
+                                onChange={(e) =>
+                                  handleUpdateImageUrlAt(idx, e.target.value)
+                                }
+                                className="flex-1 min-w-0 min-h-[36px] px-2.5 py-1 rounded-lg bg-[#0A0A0A] border border-[#2A2A2A] text-xs text-white font-mono focus:outline-none focus:border-white"
+                              />
+
+                              <div className="flex items-center gap-1 shrink-0">
+                                <button
+                                  type="button"
+                                  data-testid={`move-image-up-${idx}`}
+                                  disabled={idx === 0}
+                                  onClick={() => handleMoveImage(idx, 'up')}
+                                  className="w-8 h-8 rounded-lg bg-[#0A0A0A] hover:bg-white/10 disabled:opacity-30 border border-[#2A2A2A] text-white inline-flex items-center justify-center transition-colors cursor-pointer"
+                                  title="Subir imagen"
+                                >
+                                  <ArrowUp className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  data-testid={`move-image-down-${idx}`}
+                                  disabled={idx === formState.imageUrls.length - 1}
+                                  onClick={() => handleMoveImage(idx, 'down')}
+                                  className="w-8 h-8 rounded-lg bg-[#0A0A0A] hover:bg-white/10 disabled:opacity-30 border border-[#2A2A2A] text-white inline-flex items-center justify-center transition-colors cursor-pointer"
+                                  title="Bajar imagen"
+                                >
+                                  <ArrowDown className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  data-testid={`remove-image-${idx}`}
+                                  onClick={() => handleRemoveImage(idx)}
+                                  className="w-8 h-8 rounded-lg bg-[#0A0A0A] hover:bg-white/10 border border-[#2A2A2A] hover:border-white text-neutral-300 hover:text-white inline-flex items-center justify-center transition-colors cursor-pointer"
+                                  title="Borrar imagen"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* ENTREGA FINAL (para ambos tipos): Archivos finales con nombre visible y enlace — guardados en entregas/{projectId} */}
+                <div className="bg-[#0A0A0A] border border-[#2A2A2A] rounded-xl p-4 space-y-4">
+                  <div className="space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <h3 className="text-xs font-semibold text-white">
+                          Archivos de entrega final (sin marca de agua)
+                        </h3>
+                        <p className="text-[11px] text-neutral-400 mt-0.5">
+                          Agrega uno o varios archivos con su nombre visible y enlace (Cloudinary, archivo directo .mp4/.png/.pdf o Google Drive). Se guardan protegidos en la colección &ldquo;entregas&rdquo;.
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        data-testid="add-final-file-row-btn"
+                        onClick={handleAddFinalFileRow}
+                        className="min-h-[36px] px-3 py-1.5 rounded-xl bg-white hover:bg-neutral-200 text-black text-xs font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer shrink-0"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>Agregar archivo final</span>
+                      </button>
+                    </div>
+
+                    {formState.finalFiles.length === 0 ? (
+                      <div className="p-3.5 rounded-xl bg-[#111111] border border-[#2A2A2A] text-xs text-neutral-400 flex items-center justify-between gap-2">
+                        <span>
+                          Aún no has agregado archivos finales. Toca &ldquo;Agregar archivo final&rdquo; para añadir enlaces de entrega.
+                        </span>
+                      </div>
+                    ) : (
+                      <div
+                        className="space-y-2.5"
+                        data-testid="admin-final-files-list"
+                      >
+                        {formState.finalFiles.map((file, idx) => (
+                          <div
+                            key={idx}
+                            data-testid={`admin-final-file-row-${idx}`}
+                            className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-center bg-[#111111] border border-[#2A2A2A] rounded-xl p-3"
+                          >
+                            <div className="sm:col-span-5 flex items-center gap-2">
+                              <FileText className="w-4 h-4 text-neutral-400 shrink-0" />
+                              <input
+                                type="text"
+                                maxLength={140}
+                                data-testid={`final-file-name-input-${idx}`}
+                                value={file.name}
+                                onChange={(e) =>
+                                  handleUpdateFinalFileRow(
+                                    idx,
+                                    'name',
+                                    e.target.value
+                                  )
+                                }
+                                placeholder="Nombre visible (ej. Diseño final.pdf, Pieza 1.png)"
+                                className="w-full min-h-[40px] px-3 py-1.5 rounded-lg bg-[#0A0A0A] border border-[#2A2A2A] text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-white"
+                              />
+                            </div>
+
+                            <div className="sm:col-span-6">
+                              <input
+                                type="url"
+                                maxLength={500}
+                                data-testid={`final-file-url-input-${idx}`}
+                                value={file.url}
+                                onChange={(e) =>
+                                  handleUpdateFinalFileRow(
+                                    idx,
+                                    'url',
+                                    e.target.value
+                                  )
+                                }
+                                placeholder="Enlace (Cloudinary, .mp4, Google Drive...)"
+                                className="w-full min-h-[40px] px-3 py-1.5 rounded-lg bg-[#0A0A0A] border border-[#2A2A2A] text-xs text-white font-mono placeholder-neutral-500 focus:outline-none focus:border-white"
+                              />
+                            </div>
+
+                            <div className="sm:col-span-1 flex justify-end">
+                              <button
+                                type="button"
+                                data-testid={`remove-final-file-btn-${idx}`}
+                                onClick={() => handleRemoveFinalFileRow(idx)}
+                                className="w-9 h-9 rounded-lg bg-[#0A0A0A] hover:bg-white/10 border border-[#2A2A2A] hover:border-white text-neutral-300 hover:text-white inline-flex items-center justify-center transition-colors cursor-pointer"
+                                title="Eliminar archivo final"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
                   {/* Interruptor "Habilitar descarga" */}
@@ -1746,7 +2196,9 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                       Comentarios del cliente ({sortedComments.length})
                     </h3>
                     <p className="text-xs text-neutral-400 mt-0.5">
-                      Marca los comentarios como resueltos a medida que apliques los cambios en el video
+                      {selectedProject.projectType === 'images'
+                        ? 'Marca los comentarios como resueltos a medida que apliques los cambios en cada imagen'
+                        : 'Marca los comentarios como resueltos a medida que apliques los cambios en el video'}
                     </p>
                   </div>
                 </div>
@@ -1764,7 +2216,9 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                       >
                         <div className="flex items-start gap-3 min-w-0">
                           <span className="font-mono tabular-nums text-xs font-semibold px-2.5 py-1 rounded-lg bg-[#0A0A0A] border border-[#2A2A2A] text-white shrink-0 mt-0.5">
-                            {formatVideoTimestamp(c.videoSecond)}
+                            {selectedProject.projectType === 'images'
+                              ? `Imagen ${c.imageNumber || 1}`
+                              : formatVideoTimestamp(c.videoSecond)}
                           </span>
                           <div className="min-w-0 space-y-1">
                             <div className="flex items-center gap-2 text-xs">

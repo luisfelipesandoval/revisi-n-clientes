@@ -242,7 +242,10 @@ test('buildVisibleProjectsSummary filters out hidden projects and strips hidden 
       clientName: 'Dreyzon',
       clientId: cid,
       mostrarEnListaCliente: true,
+      projectType: 'video',
       videoUrl: 'https://example.com/1.mp4',
+      imageUrls: [],
+      finalFileNames: [],
       price: 250,
       currency: 'S/',
       showPrice: true,
@@ -260,7 +263,10 @@ test('buildVisibleProjectsSummary filters out hidden projects and strips hidden 
       clientName: 'Dreyzon',
       clientId: cid,
       mostrarEnListaCliente: true,
+      projectType: 'video',
       videoUrl: 'https://example.com/2.mp4',
+      imageUrls: [],
+      finalFileNames: [],
       price: 500,
       currency: 'S/',
       showPrice: false,
@@ -278,7 +284,10 @@ test('buildVisibleProjectsSummary filters out hidden projects and strips hidden 
       clientName: 'Dreyzon',
       clientId: cid,
       mostrarEnListaCliente: false,
+      projectType: 'video',
       videoUrl: 'https://example.com/3.mp4',
+      imageUrls: [],
+      finalFileNames: [],
       price: 300,
       currency: 'S/',
       showPrice: true,
@@ -299,10 +308,31 @@ test('buildVisibleProjectsSummary filters out hidden projects and strips hidden 
   assert.ok(s1);
   assert.equal(s1.price, 250);
   assert.equal(s1.status, 'En revisión');
+  assert.equal(s1.projectType, 'video');
 
   const s2 = summary.find((s) => s.id === 'p2');
   assert.ok(s2);
   assert.equal(s2.price, undefined);
   assert.equal(s2.showPrice, false);
   assert.equal(s2.status, 'Entregado');
+});
+
+test('validateProjectPayload accepts images projects with imageUrls and finalFileNames and rejects empty imageUrls', () => {
+  const validImagesProject = {
+    ...validProject,
+    projectType: 'images' as const,
+    videoUrl: '',
+    imageUrls: [
+      'https://res.cloudinary.com/demo/image/upload/p1.jpg',
+      'https://res.cloudinary.com/demo/image/upload/p2.png',
+    ],
+    finalFileNames: ['Diseño final.pdf', 'Pieza 1.png'],
+  };
+  assert.equal(validateProjectPayload(validImagesProject), true);
+
+  const emptyImagesProject = {
+    ...validImagesProject,
+    imageUrls: [],
+  };
+  assert.equal(validateProjectPayload(emptyImagesProject), false);
 });

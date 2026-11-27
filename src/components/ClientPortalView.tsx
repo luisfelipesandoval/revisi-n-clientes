@@ -5,6 +5,7 @@ import {
   Clock,
   ArrowRight,
   Film,
+  Image as ImageIcon,
 } from 'lucide-react';
 import { Cliente } from '../types';
 import { formatPrice, getStatusVisuals } from '../utils/video';
@@ -35,7 +36,7 @@ export const ClientPortalView: React.FC<ClientPortalViewProps> = ({
       <header className="bg-[#111111] border border-[#2A2A2A] rounded-2xl p-5 sm:p-6 mb-6">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
           <div>
-            <p className="text-xs text-neutral-400">Proyectos de video</p>
+            <p className="text-xs text-neutral-400">Proyectos del cliente</p>
             <h1 className="text-xl sm:text-2xl font-bold text-white tracking-tight mt-0.5">
               {cliente.name}
             </h1>
@@ -58,6 +59,7 @@ export const ClientPortalView: React.FC<ClientPortalViewProps> = ({
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {visibleProjects.map((item) => {
             const st = getStatusVisuals(item.status);
+            const isImages = item.projectType === 'images';
             return (
               <a
                 key={item.id}
@@ -67,21 +69,33 @@ export const ClientPortalView: React.FC<ClientPortalViewProps> = ({
               >
                 <div className="space-y-2.5">
                   <div className="flex items-start justify-between gap-2">
-                    <span
-                      className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-lg ${st.badgeClass}`}
-                    >
-                      {(item.status === 'Aprobado' ||
-                        item.status === 'Entregado') && (
-                        <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-                      )}
-                      {item.status === 'Cambios solicitados' && (
-                        <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                      )}
-                      {item.status === 'En revisión' && (
-                        <Clock className="w-3.5 h-3.5 shrink-0" />
-                      )}
-                      <span>{item.status}</span>
-                    </span>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span
+                        className="inline-flex items-center justify-center w-6 h-6 rounded-md bg-[#0A0A0A] border border-[#2A2A2A] text-neutral-300 shrink-0"
+                        title={isImages ? 'Proyecto de imágenes' : 'Proyecto de video'}
+                      >
+                        {isImages ? (
+                          <ImageIcon className="w-3.5 h-3.5" />
+                        ) : (
+                          <Film className="w-3.5 h-3.5" />
+                        )}
+                      </span>
+                      <span
+                        className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-lg ${st.badgeClass}`}
+                      >
+                        {(item.status === 'Aprobado' ||
+                          item.status === 'Entregado') && (
+                          <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                        )}
+                        {item.status === 'Cambios solicitados' && (
+                          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                        )}
+                        {item.status === 'En revisión' && (
+                          <Clock className="w-3.5 h-3.5 shrink-0" />
+                        )}
+                        <span>{item.status}</span>
+                      </span>
+                    </div>
 
                     {item.showPrice && typeof item.price === 'number' && (
                       <span className="font-mono tabular-nums text-sm font-semibold text-white shrink-0">

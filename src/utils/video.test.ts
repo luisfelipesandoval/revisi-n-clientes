@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   parseVideoUrl,
+  parseImageUrlsFromText,
+  isGoogleDriveUrl,
   formatVideoTimestamp,
   parseTimestampInput,
   sortCommentsByTime,
@@ -30,6 +32,25 @@ test('parseVideoUrl accepts direct MP4 URLs and rejects YouTube or invalid URLs'
   assert.equal(invalid.type, 'invalid');
 });
 
+test('parseImageUrlsFromText and isGoogleDriveUrl parse multiline image URLs and detect Drive links', () => {
+  const rawText = `
+    https://res.cloudinary.com/demo/image/upload/pieza1.jpg
+    https://res.cloudinary.com/demo/image/upload/pieza2.png
+
+    not-a-valid-url
+  `;
+  const parsed = parseImageUrlsFromText(rawText);
+  assert.deepEqual(parsed.validUrls, [
+    'https://res.cloudinary.com/demo/image/upload/pieza1.jpg',
+    'https://res.cloudinary.com/demo/image/upload/pieza2.png',
+  ]);
+  assert.deepEqual(parsed.invalidLines, ['not-a-valid-url']);
+
+  assert.equal(isGoogleDriveUrl('https://drive.google.com/file/d/12345/view?usp=sharing'), true);
+  assert.equal(isGoogleDriveUrl('https://docs.google.com/presentation/d/123'), true);
+  assert.equal(isGoogleDriveUrl('https://res.cloudinary.com/demo/image/upload/pieza1.png'), false);
+});
+
 test('formatVideoTimestamp and parseTimestampInput format exact seconds accurately', () => {
   assert.equal(formatVideoTimestamp(0), '00:00');
   assert.equal(formatVideoTimestamp(19.7), '00:19');
@@ -42,17 +63,20 @@ test('formatVideoTimestamp and parseTimestampInput format exact seconds accurate
   assert.equal(parseTimestampInput('01:75'), null);
 });
 
-test('sortCommentsByTime orders comments chronologically by videoSecond', () => {
+test('sortCommentsByTime orders comments by videoSecond for video projects and by imageNumber for image projects', () => {
   const d1 = new Date('2026-11-26T10:00:00Z');
   const d2 = new Date('2026-11-26T10:05:00Z');
   const comments: VideoComment[] = [
-    { id: 'c1', projectId: 'p1', authorName: 'Ana', text: 'Final', videoSecond: 25, createdAt: d1, resolved: false },
-    { id: 'c2', projectId: 'p1', authorName: 'Ana', text: 'Inicio', videoSecond: 3, createdAt: d2, resolved: true },
-    { id: 'c3', projectId: 'p1', authorName: 'Ana', text: 'Medio', videoSecond: 14, createdAt: d1, resolved: false },
+    { id: 'c1', projectId: 'p1', authorName: 'Ana', text: 'Final', videoSecond: 25, imageNumber: 3, createdAt: d1, resolved: false },
+    { id: 'c2', projectId: 'p1', authorName: 'Ana', text: 'Inicio', videoSecond: 3, imageNumber: 1, createdAt: d2, resolved: true },
+    { id: 'c3', projectId: 'p1', authorName: 'Ana', text: 'Medio', videoSecond: 14, imageNumber: 2, createdAt: d1, resolved: false },
   ];
 
-  const sorted = sortCommentsByTime(comments);
-  assert.deepEqual(sorted.map((c) => c.id), ['c2', 'c3', 'c1']);
+  const sortedVideo = sortCommentsByTime(comments, 'video');
+  assert.deepEqual(sortedVideo.map((c) => c.id), ['c2', 'c3', 'c1']);
+
+  const sortedImages = sortCommentsByTime(comments, 'images');
+  assert.deepEqual(sortedImages.map((c) => c.id), ['c2', 'c3', 'c1']);
 });
 
 test('buildWhatsAppApprovalUrl and formatPrice generate expected Spanish output', () => {

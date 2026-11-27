@@ -202,3 +202,47 @@ export function getAdminDeliveryBadge(
   }
   return null;
 }
+
+export type StatusConfirmationAction =
+  | 'approve'
+  | 'remove-approval'
+  | 'request-changes';
+
+/**
+ * Returns exact confirmation modal copy and target status for client status actions.
+ */
+export function getStatusConfirmationConfig(action: StatusConfirmationAction): {
+  message: string;
+  confirmLabel: string;
+  cancelLabel: string;
+  targetStatus: ProjectStatus;
+  opensYapeModal: boolean;
+} {
+  switch (action) {
+    case 'approve':
+      return {
+        message: '¿Aprobar este video? Al aprobar se mostrará el método de pago.',
+        confirmLabel: 'Sí, aprobar',
+        cancelLabel: 'Cancelar',
+        targetStatus: 'Aprobado',
+        opensYapeModal: true,
+      };
+    case 'remove-approval':
+      return {
+        message:
+          "¿Seguro que quieres quitar la aprobación? El proyecto volverá a 'En revisión'.",
+        confirmLabel: 'Sí, quitar',
+        cancelLabel: 'Cancelar',
+        targetStatus: 'En revisión',
+        opensYapeModal: false,
+      };
+    case 'request-changes':
+      return {
+        message: '¿Solicitar cambios en este video?',
+        confirmLabel: 'Sí',
+        cancelLabel: 'Cancelar',
+        targetStatus: 'Cambios solicitados',
+        opensYapeModal: false,
+      };
+  }
+}

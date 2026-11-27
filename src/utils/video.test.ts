@@ -9,6 +9,7 @@ import {
   buildYapeWhatsAppUrl,
   formatFinalVideoFilename,
   getAdminDeliveryBadge,
+  getStatusConfirmationConfig,
   formatPrice,
   YAPE_NUMBER_DISPLAY,
   YAPE_NUMBER_RAW,
@@ -85,4 +86,30 @@ test('Yape payment helpers, final video filename, and delivery badges work as sp
   assert.equal(getAdminDeliveryBadge('En revisión', false), null);
   assert.equal(getAdminDeliveryBadge('Aprobado', false)?.label, 'Pago pendiente');
   assert.equal(getAdminDeliveryBadge('Aprobado', true)?.label, 'Entregado');
+});
+
+test('getStatusConfirmationConfig returns exact Spanish prompts and target statuses', () => {
+  const approveCfg = getStatusConfirmationConfig('approve');
+  assert.equal(approveCfg.message, '¿Aprobar este video? Al aprobar se mostrará el método de pago.');
+  assert.equal(approveCfg.confirmLabel, 'Sí, aprobar');
+  assert.equal(approveCfg.cancelLabel, 'Cancelar');
+  assert.equal(approveCfg.targetStatus, 'Aprobado');
+  assert.equal(approveCfg.opensYapeModal, true);
+
+  const removeCfg = getStatusConfirmationConfig('remove-approval');
+  assert.equal(
+    removeCfg.message,
+    "¿Seguro que quieres quitar la aprobación? El proyecto volverá a 'En revisión'."
+  );
+  assert.equal(removeCfg.confirmLabel, 'Sí, quitar');
+  assert.equal(removeCfg.cancelLabel, 'Cancelar');
+  assert.equal(removeCfg.targetStatus, 'En revisión');
+  assert.equal(removeCfg.opensYapeModal, false);
+
+  const changesCfg = getStatusConfirmationConfig('request-changes');
+  assert.equal(changesCfg.message, '¿Solicitar cambios en este video?');
+  assert.equal(changesCfg.confirmLabel, 'Sí');
+  assert.equal(changesCfg.cancelLabel, 'Cancelar');
+  assert.equal(changesCfg.targetStatus, 'Cambios solicitados');
+  assert.equal(changesCfg.opensYapeModal, false);
 });

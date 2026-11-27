@@ -24,6 +24,8 @@ import {
   buildYapeWhatsAppUrl,
   formatFinalVideoFilename,
   getStatusVisuals,
+  getStatusConfirmationConfig,
+  StatusConfirmationAction,
   YAPE_NUMBER_DISPLAY,
   YAPE_NUMBER_RAW,
 } from '../utils/video';
@@ -73,7 +75,9 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
   const [isUpdatingStatus, setIsUpdatingStatus] = useState<boolean>(false);
   const [statusFeedback, setStatusFeedback] = useState<string | null>(null);
 
-  // Yape Payment Modal & Copy state
+  // Status Confirmation Modal & Yape Payment Modal state
+  const [pendingConfirmAction, setPendingConfirmAction] =
+    useState<StatusConfirmationAction | null>(null);
   const [isYapeModalOpen, setIsYapeModalOpen] = useState<boolean>(false);
   const [yapeCopied, setYapeCopied] = useState<boolean>(false);
   const [isDownloading, setIsDownloading] = useState<boolean>(false);
@@ -106,23 +110,30 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
     playerRef.current?.seekToSecond(seconds);
   };
 
-  const handleStatusChange = async (newStatus: ProjectStatus) => {
-    // Once download is enabled, the status remains permanently fixed at "Aprobado"
-    if (isDownloadEnabled || isUpdatingStatus) return;
+  const handleConfirmStatusAction = async () => {
+    if (!pendingConfirmAction || isDownloadEnabled || isUpdatingStatus) return;
 
+    const config = getStatusConfirmationConfig(pendingConfirmAction);
     setIsUpdatingStatus(true);
     setStatusFeedback(null);
     setFormError(null);
+
     try {
-      await onUpdateStatus(newStatus);
-      if (newStatus === 'Aprobado') {
+      await onUpdateStatus(config.targetStatus);
+      setPendingConfirmAction(null);
+      if (config.opensYapeModal) {
         setIsYapeModalOpen(true);
         setStatusFeedback(null);
       } else {
         setIsYapeModalOpen(false);
-        setStatusFeedback('Estado actualizado a "Cambios solicitados".');
+        setStatusFeedback(
+          config.targetStatus === 'En revisión'
+            ? 'Aprobación quitada. El proyecto volvió a "En revisión".'
+            : 'Estado actualizado a "Cambios solicitados".'
+        );
       }
     } catch (err) {
+      setPendingConfirmAction(null);
       setFormError(formatReadableFirestoreError(err));
     } finally {
       setIsUpdatingStatus(false);
@@ -274,28 +285,43 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
               {effectiveStatus === 'En revisión' && (
                 <Clock className="w-4 h-4 shrink-0" />
               )}
-              <span>Estado: {effectiveStatus}</span>
+              <span>
+                Estado: {isDownloadEnabled ? 'Entregado' : effectiveStatus}
+              </span>
             </div>
 
-            {/* Client can switch between "Aprobado" and "Solicitar cambios" freely WHILE download is locked */}
+            {/* Status action buttons shown ONLY while download is locked */}
             {!isDownloadEnabled && (
               <div className="grid grid-cols-2 sm:flex items-center gap-2.5">
-                <button
-                  type="button"
-                  disabled={isUpdatingStatus}
-                  data-testid="approve-btn"
-                  onClick={() => handleStatusChange('Aprobado')}
-                  className="min-h-[44px] px-4 py-2.5 rounded-xl text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-2 transition-all whitespace-nowrap shrink-0 cursor-pointer bg-white text-black hover:bg-neutral-200"
-                >
-                  <CheckCircle2 className="w-4 h-4 shrink-0" />
-                  <span>Aprobar</span>
-                </button>
+                {project.status === 'Aprobado' ? (
+                  <button
+                    type="button"
+                    disabled={isUpdatingStatus}
+                    data-testid="remove-approval-btn"
+                    onClick={() => setPendingConfirmAction('remove-approval')}
+                    className="min-h-[44px] px-4 py-2.5 rounded-xl text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-2 transition-all whitespace-nowrap shrink-0 cursor-pointer bg-transparent text-white border border-white hover:bg-white/10"
+                  >
+                    <X className="w-4 h-4 shrink-0" />
+                    <span>Quitar aprobación</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={isUpdatingStatus}
+                    data-testid="approve-btn"
+                    onClick={() => setPendingConfirmAction('approve')}
+                    className="min-h-[44px] px-4 py-2.5 rounded-xl text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-2 transition-all whitespace-nowrap shrink-0 cursor-pointer bg-white text-black hover:bg-neutral-200"
+                  >
+                    <CheckCircle2 className="w-4 h-4 shrink-0" />
+                    <span>Aprobar</span>
+                  </button>
+                )}
 
                 <button
                   type="button"
                   disabled={isUpdatingStatus}
                   data-testid="request-changes-btn"
-                  onClick={() => handleStatusChange('Cambios solicitados')}
+                  onClick={() => setPendingConfirmAction('request-changes')}
                   className="min-h-[44px] px-4 py-2.5 rounded-xl text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-2 transition-all whitespace-nowrap shrink-0 cursor-pointer bg-transparent text-white border border-white hover:bg-white/10"
                 >
                   <AlertCircle className="w-4 h-4 shrink-0" />
@@ -637,6 +663,52 @@ export const ClientReviewView: React.FC<ClientReviewViewProps> = ({
           </div>
         </aside>
       </div>
+
+      {/* Status Confirmation Modal (Monochrome Black & White) */}
+      {pendingConfirmAction && !isDownloadEnabled && (() => {
+        const confirmConfig = getStatusConfirmationConfig(pendingConfirmAction);
+        return (
+          <div
+            className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="status-confirm-message"
+            data-testid="status-confirmation-modal"
+          >
+            <div className="w-full max-w-sm bg-[#111111] border border-white rounded-2xl p-6 space-y-5 text-white shadow-2xl">
+              <p
+                id="status-confirm-message"
+                className="text-sm sm:text-base font-medium text-white leading-relaxed"
+                data-testid="status-confirm-message"
+              >
+                {confirmConfig.message}
+              </p>
+
+              <div className="flex items-center justify-end gap-2.5 pt-1">
+                <button
+                  type="button"
+                  disabled={isUpdatingStatus}
+                  data-testid="status-confirm-cancel-btn"
+                  onClick={() => setPendingConfirmAction(null)}
+                  className="min-h-[42px] px-4 py-2 rounded-xl bg-transparent hover:bg-white/10 border border-white text-white text-xs sm:text-sm font-semibold transition-colors cursor-pointer"
+                >
+                  {confirmConfig.cancelLabel}
+                </button>
+
+                <button
+                  type="button"
+                  disabled={isUpdatingStatus}
+                  data-testid="status-confirm-submit-btn"
+                  onClick={handleConfirmStatusAction}
+                  className="min-h-[42px] px-4 py-2 rounded-xl bg-white hover:bg-neutral-200 text-black text-xs sm:text-sm font-semibold transition-colors cursor-pointer"
+                >
+                  {confirmConfig.confirmLabel}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Yape Payment Modal ("Pago por Yape") */}
       {isYapeModalOpen && !isDownloadEnabled && (
